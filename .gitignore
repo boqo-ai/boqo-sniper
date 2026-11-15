@@ -3,3 +3,4 @@ out/
 *.mp4
 *.ts
 !tests/fixtures/**
+!engine/fixtures/**
