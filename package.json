@@ -1,0 +1,7 @@
+{
+  "name": "boqo-sniper",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test tests/*.test.mjs" }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "boqo-sniper",
+  "version": "0.1.0",
+  "description": "Watch a Twitch stream live on your own PC and clip the moments chat goes wild, with your brand.",
+  "author": {
+    "name": "boqo",
+    "url": "https://boqo.ai"
+  },
+  "homepage": "https://github.com/boqo-ai/boqo-sniper",
+  "repository": "https://github.com/boqo-ai/boqo-sniper",
+  "license": "MIT",
+  "keywords": [
+    "twitch",
+    "live stream",
+    "clips",
+    "short-form video",
+    "chat",
+    "agent skill"
+  ]
+}
