@@ -63,6 +63,11 @@ test("normalizeChat lower-cases, squeezes spaces and counts a repeated word once
   assert.equal(normalizeChat("W W cop W"), "w cop w");
   assert.equal(normalizeChat("   "), "");
   assert.equal(normalizeChat(undefined), "");
+  assert.equal(normalizeChat("lol \u034F"), "lol", "the duplicate-filter dodge is invisible");
+  assert.equal(normalizeChat("lol \u{E0000}"), "lol");
+  assert.equal(normalizeChat("w\u200Bw cop"), "ww cop");
+  assert.equal(normalizeChat("\u2800"), "");
+  assert.equal(normalizeChat("Café"), "café", "letters are kept");
 });
 
 test("topChat counts the window only, most first, at most 8", () => {
