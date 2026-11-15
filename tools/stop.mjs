@@ -11,22 +11,13 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { currentSession, readStatus } from "../lib/session.mjs";
+import { cleanupSession, currentSession, pidAlive, watcherPid } from "../lib/session.mjs";
 
 const WAIT_MS = 20000;
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
   process.exit(1);
-}
-
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err.code === "EPERM";
-  }
 }
 
 async function gone(pid, ms) {
@@ -46,19 +37,11 @@ async function main() {
     console.log(JSON.stringify({ stopped: false, reason: "no-session" }));
     return;
   }
-  let pid = NaN;
-  try {
-    pid = Number((await fs.readFile(path.join(session, "watch.pid"), "utf8")).trim());
-  } catch {}
-  const status = await readStatus(session);
-  if (!Number.isInteger(pid) || pid <= 0 || !pidAlive(pid)) {
-    // A watcher that died without saying so must not keep `next` waiting.
-    if (status && status.state !== "offline" && status.state !== "stopped") {
-      const file = path.join(session, "status.json");
-      await fs.writeFile(`${file}.tmp`, JSON.stringify({ ...status, state: "stopped", updatedAt: new Date().toISOString() }));
-      await fs.rename(`${file}.tmp`, file);
-    }
-    await fs.rm(path.join(session, "watch.pid"), { force: true });
+  const pid = await watcherPid(session);
+  if (pid === null) {
+    // No live watcher owns the session. One that died without saying so must
+    // not leave its buffer on disk or keep `next` waiting on a "live" status.
+    await cleanupSession(session);
     console.log(JSON.stringify({ stopped: false, reason: "not-running" }));
     return;
   }
@@ -76,6 +59,8 @@ async function main() {
       process.kill(pid, "SIGKILL");
     } catch {}
     await gone(pid, 5000);
+    // It never got to clean up after itself.
+    await cleanupSession(session);
   }
   console.log(JSON.stringify({ stopped: true, channel: channel.toLowerCase(), pid }));
 }

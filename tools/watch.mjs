@@ -34,7 +34,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDetector } from "../lib/detector.mjs";
 import { connectChat } from "../lib/twitch-chat.mjs";
-import { currentSession, newSession, readStatus, stamp } from "../lib/session.mjs";
+import { cleanupSession, newSession, stamp, sweepChannel, watcherPid, writeJsonAtomic, currentSession } from "../lib/session.mjs";
 import {
   HORIZON_SEC,
   POST_ROLL_SEC,
@@ -49,8 +49,8 @@ import {
 import { measureLoudness } from "../lib/loudness.mjs";
 
 export const MAX_OFFLINE_POLLS = 10;
-const STALE_STATUS_SEC = 10 * 60;
-const FINAL = new Set(["offline", "stopped"]);
+/** No new segment for this long while capturing: the source is stuck, kill it and start over. */
+const STALL_SEC = 60;
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
@@ -158,26 +158,6 @@ function runOnce(cmd, args, { cwd, timeoutMs = 60000 } = {}) {
   });
 }
 
-/** Temp file then rename: a reader never sees half a file. Windows can refuse a rename onto a file being read; retry, then give up quietly if asked to. */
-async function writeJsonAtomic(file, value, { quiet = false } = {}) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(value));
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await fs.rename(tmp, file);
-      return;
-    } catch (err) {
-      if (attempt < 5 && ["EPERM", "EBUSY", "EACCES"].includes(err.code)) {
-        await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
-        continue;
-      }
-      await fs.rm(tmp, { force: true });
-      if (quiet) return;
-      throw err;
-    }
-  }
-}
-
 async function unlinkRetry(file) {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -190,33 +170,12 @@ async function unlinkRetry(file) {
   }
 }
 
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err.code === "EPERM";
-  }
-}
-
 /** The channel's current session is still being watched by a live process. */
 async function runningWatcher(channel) {
   const dir = await currentSession(channel);
   if (!dir) return null;
-  let pid;
-  try {
-    pid = Number((await fs.readFile(path.join(dir, "watch.pid"), "utf8")).trim());
-  } catch {
-    return null;
-  }
-  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || !pidAlive(pid)) return null;
-  const status = await readStatus(dir);
-  if (status) {
-    if (FINAL.has(status.state)) return null;
-    const age = Date.now() / 1000 - Date.parse(status.updatedAt) / 1000;
-    if (Number.isFinite(age) && age > STALE_STATUS_SEC) return null; // a recycled pid, not our watcher
-  }
-  return { dir, pid };
+  const pid = await watcherPid(dir);
+  return pid === null ? null : { dir, pid };
 }
 
 // ---- capture --------------------------------------------------------------
@@ -226,6 +185,10 @@ async function runningWatcher(channel) {
  * stdout; ffmpeg copies it into 10 s segments named by the UTC second they open.
  */
 function captureCommand(tool, channel) {
+  if (tool === "test-source") {
+    const [cmd, ...args] = JSON.parse(process.env.BOQO_SNIPER_SOURCE);
+    return { cmd, args };
+  }
   if (tool === "streamlink") {
     return { cmd: "streamlink", args: ["--twitch-disable-ads", "--stdout", `twitch.tv/${channel}`, "best"] };
   }
@@ -317,6 +280,7 @@ function startCapture(tool, channel, bufDir) {
 }
 
 async function isLive(tool, channel) {
+  if (tool === "test-source") return false;
   if (await hasTool("yt-dlp")) {
     const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", `https://www.twitch.tv/${channel}`], {
       timeoutMs: 45000,
@@ -348,11 +312,13 @@ async function main() {
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
   const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
+  const stallSec = envNumber("BOQO_SNIPER_STALL_SEC", STALL_SEC);
 
   let tool = null;
   if (!(await hasTool("ffmpeg", "-version"))) fail("ffmpeg is not on PATH");
   if (!replay) {
-    if (await hasTool("streamlink")) tool = "streamlink";
+    if (process.env.BOQO_SNIPER_SOURCE) tool = "test-source";
+    else if (await hasTool("streamlink")) tool = "streamlink";
     else if (await hasTool("yt-dlp")) tool = "yt-dlp";
     else fail("neither streamlink nor yt-dlp is on PATH");
   }
@@ -365,6 +331,12 @@ async function main() {
   }
   if (running) fail(`already watching ${channel} (pid ${running.pid}, ${running.dir})`);
 
+  // A watcher that was hard-killed leaves its buffer, pid and "live" status behind.
+  try {
+    await sweepChannel(channel);
+  } catch (err) {
+    console.error(`sweep of old sessions failed: ${err.message}`);
+  }
   const dir = await newSession(channel, new Date());
   const bufDir = path.join(dir, "buf");
   const momentsDir = path.join(dir, "moments");
@@ -458,6 +430,7 @@ async function main() {
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
+  process.on("SIGHUP", onSignal);
 
   /** A sleep that wakes for a stop request once a second. */
   async function nap(sec) {
@@ -615,10 +588,21 @@ async function main() {
     capture = startCapture(tool, channel, bufDir);
     let over = false;
     capture.closed.then(() => (over = true));
+    // A source blocked on a dead connection neither exits nor writes: with no
+    // new segment for stallSec, end it and let the caller wait and resume.
+    let seen = totalSegments;
+    let progressAt = clock.now();
     while (!over && !(await checkStop())) {
       await Promise.race([capture.closed, new Promise((r) => setTimeout(r, 1000))]);
       await tick(false);
-      if (state !== "live" && totalSegments > before) setState("live");
+      if (totalSegments > before && state !== "live") setState("live");
+      if (totalSegments > seen) {
+        seen = totalSegments;
+        progressAt = clock.now();
+      } else if (!over && clock.now() - progressAt >= stallSec) {
+        console.error(`capture stalled: no new segment for ${stallSec} s; restarting it`);
+        break;
+      }
     }
     if (!over) capture.kill();
     await capture.closed;
@@ -658,7 +642,8 @@ async function main() {
   }
 
   let exitError = null;
-  let offlinePolls = 0;
+  let offlinePolls = 0; // consecutive polls that said offline
+  let failedCaptures = 0; // consecutive captures that made no segment
   try {
     await writeStatus();
     while (!(await checkStop())) {
@@ -666,16 +651,21 @@ async function main() {
       await (replay ? captureReplay() : captureLive());
       if (await checkStop()) break;
       await tick(true); // the capture is over: its last segment is whole now
-      offlinePolls = totalSegments > before ? 0 : offlinePolls + 1;
+      if (totalSegments > before) {
+        offlinePolls = 0;
+        failedCaptures = 0;
+      } else failedCaptures++;
       setState("waiting");
       await writeStatus();
 
       let live = false;
-      while (!live && offlinePolls < MAX_OFFLINE_POLLS) {
+      // A "live" channel whose capture keeps making nothing also ends, after as many tries.
+      while (!live && offlinePolls < MAX_OFFLINE_POLLS && failedCaptures < MAX_OFFLINE_POLLS) {
         await nap(pollSec);
         if (await checkStop()) break;
         live = replay ? false : await isLive(tool, channel);
-        if (!live) offlinePolls++;
+        if (live) offlinePolls = 0;
+        else offlinePolls++;
         await writeStatus();
       }
       if (stopRequested || !live) break;
@@ -702,7 +692,7 @@ async function main() {
   await fs.rm(stopFile, { force: true });
 
   if (exitError) fail(exitError.message);
-  process.stdout.write(JSON.stringify({ state, channel, session: dir, moments }) + "\n", () => process.exit(0));
+  process.stdout.write(JSON.stringify({ state, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
 }
 
 main().catch((err) => fail(err.message));

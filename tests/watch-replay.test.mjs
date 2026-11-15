@@ -92,6 +92,7 @@ test("replay: one burst makes one ~150 s moment, then 10 offline polls end the r
     assert.ok(Date.now() - t0 < 120000, "the replay runs on a simulated clock, not in real time");
     assert.equal(r.stdout.trim().split("\n").length, 1, "one JSON line on stdout");
     assert.equal(r.json.state, "offline");
+    assert.equal(r.json.offlinePolls, 10, "the poller said offline exactly 10 times before the run ended");
 
     const session = await onlySession(home, "chan_one");
     const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
@@ -199,6 +200,52 @@ test("stop.mjs stops a running watcher; a second watcher on the channel is refus
     const again = await run(STOP, ["stopme"], env);
     assert.equal(again.code, 0);
     assert.equal(again.json.stopped, false);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a capture that stops producing without exiting is killed and the watcher moves on", { timeout: 120000 }, async () => {
+  const work = await tmp("stall");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 1);
+    // A source that writes one clip, then hangs like a dead connection: no more data, no exit.
+    const hang = path.join(work, "hang.mjs");
+    await fs.writeFile(
+      hang,
+      'import fs from "node:fs";\nprocess.stdout.write(fs.readFileSync(process.argv[2]));\nsetInterval(() => {}, 1e6);\n',
+    );
+    const env = {
+      BOQO_HOME: home,
+      BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, hang, path.join(work, "segs", "000.ts")]),
+      BOQO_SNIPER_STALL_SEC: "3",
+      BOQO_SNIPER_POLL_MS: "200",
+    };
+    const r = await run(WATCH, ["stuck"], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /capture stalled/);
+    assert.equal(r.json.state, "offline", "after the stall it waited, polled, and ended");
+    assert.equal(r.json.offlinePolls, 10);
+    assert.equal(r.json.moments, 0);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a channel that is offline from the start also ends after 10 offline polls", { timeout: 60000 }, async () => {
+  const work = await tmp("offline");
+  try {
+    // The source dies at once: nothing to record.
+    const env = {
+      BOQO_HOME: path.join(work, "home"),
+      BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, "-e", "process.exit(1)"]),
+      BOQO_SNIPER_POLL_MS: "100",
+    };
+    const r = await run(WATCH, ["nobody"], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.state, "offline");
+    assert.equal(r.json.offlinePolls, 10);
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
