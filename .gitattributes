@@ -1,0 +1,10 @@
+# boqo-engine:begin (written by scripts/sync-engine.mjs; do not edit)
+engine/** -text
+tools/doctor.mjs -text
+tools/fetch.mjs -text
+tools/render.mjs -text
+tools/picks-check.mjs -text
+tools/brand.mjs -text
+tools/asr.mjs -text
+tools/boqo-upload.mjs -text
+# boqo-engine:end

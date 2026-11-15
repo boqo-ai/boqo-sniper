@@ -1,0 +1,15 @@
+{
+  "from": "boqo-ai/boqo-clips",
+  "commit": "caa50b2b8becc293386fc9f6bb39b5288d820df7",
+  "hash": "45b03836a5648df950c919a8840152b04a064b86df3daf982689b88b04934db9",
+  "files": [
+    "engine/",
+    "tools/doctor.mjs",
+    "tools/fetch.mjs",
+    "tools/render.mjs",
+    "tools/picks-check.mjs",
+    "tools/brand.mjs",
+    "tools/asr.mjs",
+    "tools/boqo-upload.mjs"
+  ]
+}

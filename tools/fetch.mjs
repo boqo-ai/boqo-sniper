@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+// node tools/fetch.mjs info <url> --dir <d>
+//   Reads the video info and ONE caption track, no video download. Writes
+//   <d>/info.json, and with captions <d>/words.json and <d>/transcript.md.
+//   Prints {"id","title","duration","captions":"manual|auto|none","chunks":N}.
+//   With no captions: captions "none", chunks 0, exit 0 (offer local whisper).
+// node tools/fetch.mjs sections <url> --picks <picks.json> --dir <d>
+//   Downloads only the picked sections (1 s padding), one fallback to a whole
+//   download plus local cuts. Prints {"files":[{"pick","file","offset"}]} for
+//   `render.mjs --sections`; offset is the pick's start inside its file.
+// Exit 1 with {"error":"..."} on failure.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fetchInfo, fetchSections, realRun, infoArgs } from '../engine/fetch.mjs';
+
+const fail = (msg) => {
+  process.stdout.write(JSON.stringify({ error: msg }) + '\n');
+  process.exit(1);
+};
+
+const readJson = (path, what) => {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (err) {
+    fail(`cannot read ${what} ${path}: ${err.code ?? err.message}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fail(`${what} ${path} is not valid JSON`);
+  }
+};
+
+const FLAGS = { '--dir': 'dir', '--picks': 'picks' };
+
+async function main(argv) {
+  const [cmd, ...rest] = argv;
+  if (cmd !== 'info' && cmd !== 'sections') fail('usage: fetch.mjs info <url> --dir <d> | fetch.mjs sections <url> --picks <picks.json> --dir <d>');
+  const opt = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const key = FLAGS[rest[i]];
+    if (key) {
+      if (i + 1 >= rest.length) fail(`${rest[i]} needs a value`);
+      opt[key] = rest[++i];
+    } else if (rest[i].startsWith('--')) fail(`unknown flag ${rest[i]}`);
+    else positional.push(rest[i]);
+  }
+  if (positional.length !== 1) fail(`${cmd} needs exactly one <url>`);
+  const url = positional[0];
+  if (!/^https?:\/\//i.test(url)) fail('the url must start with http:// or https://');
+  if (opt.dir === undefined) fail('--dir is required');
+  const dir = resolve(opt.dir);
+
+  if (cmd === 'info') {
+    process.stdout.write(JSON.stringify(await fetchInfo({ url, dir })) + '\n');
+    return;
+  }
+
+  if (opt.picks === undefined) fail('--picks is required');
+  const raw = readJson(opt.picks, 'picks file');
+  const picks = Array.isArray(raw) ? raw : raw?.picks;
+  if (!Array.isArray(picks) || picks.length === 0) fail('picks file must hold a non-empty array, or {"picks": [...]}');
+  picks.forEach((p, i) => {
+    if (!p || !Number.isFinite(p.s) || !Number.isFinite(p.e) || p.s < 0 || p.e <= p.s) fail(`pick ${i + 1} needs numeric 0 <= s < e in seconds`);
+  });
+
+  // The video length clamps the padding; read it from info.json, or ask once.
+  let duration;
+  try {
+    duration = JSON.parse(readFileSync(join(dir, 'info.json'), 'utf8')).duration;
+  } catch {
+    const { stdout } = await realRun.ytdlp(infoArgs(url));
+    duration = JSON.parse(stdout).duration;
+    writeFileSync(join(dir, 'info.json'), stdout);
+  }
+  const out = await fetchSections({ url, picks, dir, duration: Number.isFinite(duration) ? duration : undefined });
+  process.stdout.write(JSON.stringify(out) + '\n');
+}
+
+main(process.argv.slice(2)).catch((err) => fail(err.message));
