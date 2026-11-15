@@ -58,8 +58,8 @@ When in doubt, skip.
   line's start time plus 0.05, not between words.
 - `e`: after the payoff and the streamer's first reaction to it, before the next topic. When the last thing is
   speech, put `e` a little inside that line's last word: its end time minus 0.05.
-- Each `words` line ends `(start-end)` in seconds: those are the numbers to use. `--around <sec>` shows the words
-  near one second when you need a closer look.
+- Each `words` line ends `(start-end)` in seconds: those are the numbers to use. For a closer look at the words near
+  one second: `node "$HOME/.boqo-sniper/tools/moment.mjs" words "<moment>/words.json" --around <sec>`.
 - `picks-check.mjs` moves an edge out to the nearest word's boundary when one is within 1.5 s; an edge in gameplay
   or music with no words near it stays where you put it.
 

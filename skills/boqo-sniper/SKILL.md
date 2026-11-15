@@ -18,11 +18,11 @@ post.
 minutes, or this chat closes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
 two chats, as many as the PC carries.
 
-- **Tools:** `node ~/.boqo-sniper/tools/<tool>.mjs`, always by that path. Commands are for a POSIX shell (macOS,
+- **Tools:** `node "$HOME/.boqo-sniper/tools/<tool>.mjs"`, always by that path. Commands are for a POSIX shell (macOS,
   Linux, and on Windows Git Bash or WSL).
-- **`<home>`:** `$BOQO_HOME`, or `~/.boqo` when it is unset (`echo "${BOQO_HOME:-$HOME/.boqo}"`). Brand kits live in
-  `<home>/brands/` and are shared by every boqo skill. This skill's own files: `<home>/boqo-sniper/config.json` (the
-  posting rule and the sensitivity) and `<home>/boqo-sniper/runs.md` (one line per moment).
+- **`<home>`:** `$BOQO_HOME`, or `~/.boqo` when it is unset; `echo "${BOQO_HOME:-$HOME/.boqo}"` prints it. Brand kits
+  live in `<home>/brands/` and are shared by every boqo skill. This skill's own files: `<home>/boqo-sniper/config.json`
+  (the posting rule and the sensitivity) and `<home>/boqo-sniper/runs.md` (one line per moment).
 - **`<channel>`:** the Twitch login, in lower case (`twitch.tv/<login>`).
 - **`<session>`:** the folder the watcher records into, `<home>/boqo-sniper/<channel>/<YYYYMMDD-HHMMSS>/`. Its
   name, `<session name>`, is its UTC start. `status.mjs` prints it as `session`.
@@ -31,6 +31,11 @@ two chats, as many as the PC carries.
   in), `chat.json` (every chat line) and `meta.json` (`peakOffsetSec`, `score`, `reason`).
 - **`<clips>`:** `<home>/boqo-sniper/clips/<channel>/<moment name>/`, where the clip lands as `clip-01.mp4`. It sits
   outside `<session>` because the next watch of the channel deletes moments older than a day.
+- **Paths in commands:** write `<home>`, `<moment>`, `<clips>` and every other path out in full, as the absolute
+  path, inside double quotes, in every command, and `<channel>` and `<name>` in double quotes too:
+  `"/Users/ana/.boqo/boqo-sniper/clips/somechannel/20261115-220301/clip-01.mp4"`. A shell variable set in one command
+  is gone in the next (Claude Code runs each command in a new shell), and a home folder can hold a space. A path you
+  delete is never empty and never relative.
 
 ## Rules
 
@@ -44,7 +49,7 @@ two chats, as many as the PC carries.
 - **Quiet while waiting.** A `timeout` from `next.mjs` is not news: call it again and say nothing. The person hears
   about clips, the status line, and the end.
 - **The watcher ending is news.** In Claude Code, when the background task running `watch.mjs` completes, run
-  `status.mjs <channel>` at once: its `state` (`stopped`, `offline` or `failed`, with `error`) goes to The end.
+  `status.mjs "<channel>"` at once: its `state` (`stopped`, `offline` or `failed`, with `error`) goes to The end.
 - **The person's language.** Answer in the language the person writes in. Titles are in the stream's language.
   Files stay in English.
 - **Short messages:** what happened, what comes next. No tour of the tools unless asked.
@@ -54,8 +59,8 @@ two chats, as many as the PC carries.
   delete its `video.mp4` (The loop, steps 4 and 6).
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
 - Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp,
-  streamlink or whisper-cli: run `node ~/.boqo-sniper/tools/doctor.mjs --node 22 --whisper required --streamlink` and
-  give the person its `hints`.
+  streamlink or whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required --streamlink`
+  and give the person its `hints`.
 
 ## Starting
 
@@ -63,7 +68,7 @@ two chats, as many as the PC carries.
 
 1. **The channel.** `twitch.tv/<login>` (with or without `https://www.`) or a bare login gives `<channel>`: letters,
    digits and `_` only, in lower case. `kick.com/…`, YouTube or any other link: Rules → Twitch only.
-2. **Brand and config.** `node ~/.boqo-sniper/tools/brand.mjs show [<brand>]` (no name: the default kit).
+2. **Brand and config.** `node "$HOME/.boqo-sniper/tools/brand.mjs" show ["<brand>"]` (no name: the default kit).
    - `no brand kit saved yet`, or no `<home>/boqo-sniper/config.json`: run `onboarding.md` (it skips what is done),
      then come back here.
    - `no brand kit named …`: `brand.mjs list`, and ask which.
@@ -79,19 +84,20 @@ two chats, as many as the PC carries.
 4. **Start the watcher in the background,** so this chat stays free:
    - Claude Code: the shell tool with `run_in_background: true`, and the command
      ```sh
-     node ~/.boqo-sniper/tools/watch.mjs <channel> --sensitivity <n>
+     node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --sensitivity <n>
      ```
    - Another agent (macOS, Linux, or Windows in Git Bash or WSL), detached:
      ```sh
-     mkdir -p <home>/boqo-sniper
-     nohup node ~/.boqo-sniper/tools/watch.mjs <channel> --sensitivity <n> > <home>/boqo-sniper/<channel>.log 2>&1 &
+     mkdir -p "<home>/boqo-sniper"
+     nohup node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --sensitivity <n> \
+       > "<home>/boqo-sniper/<channel>.log" 2>&1 &
      ```
-5. **Check it runs.** `node ~/.boqo-sniper/tools/status.mjs <channel>` about every 10 s, for up to a minute, until
-   `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute. Keep its
+5. **Check it runs.** `node "$HOME/.boqo-sniper/tools/status.mjs" "<channel>"` about every 10 s, for up to a minute,
+   until `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute. Keep its
    `session`. When the watcher ends instead, its one line (Claude Code: the background task's output; elsewhere the
    `.log` file) says why:
    - `already watching <channel> …`: another chat, or an earlier one, is watching this channel. Ask whether to stop
-     that watch and watch here instead; on a yes, `stop.mjs <channel>` (The end → Stop), then step 4 again.
+     that watch and watch here instead; on a yes, `stop.mjs "<channel>"` (The end → Stop), then step 4 again.
    - any other error: say it (Rules).
 6. **Tell the person,** in two or three lines: you are watching `<channel>` and clip the moments chat goes wild,
    until they say stop or the stream ends. In Claude Code, closing this chat stops the watch too. Elsewhere, ask
@@ -106,23 +112,23 @@ Repeat until The end.
 
 1. **Wait for a moment.**
    ```sh
-   node ~/.boqo-sniper/tools/next.mjs <channel>
+   node "$HOME/.boqo-sniper/tools/next.mjs" "<channel>"
    ```
    - `{"moment": "<moment>", "meta": {…}}`: go on with step 2.
    - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 3 minutes
-     old, the watcher died without a word: run `stop.mjs <channel>` (it cleans up), tell the person, offer to start
+     old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up), tell the person, offer to start
      again (Starting, step 3), and go to The end.
    - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end.
 2. **Transcribe.**
    ```sh
-   node ~/.boqo-sniper/tools/asr.mjs <moment>/video.mp4 --out <moment>/words.json
+   node "$HOME/.boqo-sniper/tools/asr.mjs" "<moment>/video.mp4" --out "<moment>/words.json"
    ```
    `{"words": 0, …}` is a moment with no speech, gameplay or music only: judge it on chat and the frames.
 3. **Read it**, with the moment tool. Never read `chat.json` or `words.json` whole: a busy chat writes hundreds of KB.
    ```sh
-   node ~/.boqo-sniper/tools/moment.mjs read <moment>
-   node ~/.boqo-sniper/tools/moment.mjs words <moment>/words.json
-   node ~/.boqo-sniper/tools/moment.mjs frames <moment>/video.mp4 --at <peakOffsetSec> --out <moment>
+   node "$HOME/.boqo-sniper/tools/moment.mjs" read "<moment>"
+   node "$HOME/.boqo-sniper/tools/moment.mjs" words "<moment>/words.json"
+   node "$HOME/.boqo-sniper/tools/moment.mjs" frames "<moment>/video.mp4" --at <peakOffsetSec> --out "<moment>"
    ```
    - `read` gives `meta`, `topChat` (the 8 messages chat repeated most, from 15 s before the peak to 25 s after it,
      with their counts), `chatPerSec` (messages a second in each 10 s of the file, from its start) and
@@ -131,27 +137,27 @@ Repeat until The end.
      last word's exact times in seconds.
    - `frames` writes two stills, 6 s before the peak and 2 s after it: look at both `frames[].file` when you can
      read images.
-4. **Judge** by `judge.md`, and write `<moment>/judge.json`. A `skip`: delete `<moment>/video.mp4`, log it (step 9),
+4. **Judge** by `judge.md`, and write `<moment>/judge.json`. A `skip`: `rm -f "<moment>/video.mp4"`, log it (step 9),
    and go back to step 1.
 5. **Check the edges.** Write `<moment>/pick.json`, `[{"s": …, "e": …, "title": "…"}]` (with `"hook"` when the
    verdict has one). Then, with `<length>` the `durationSec` from step 3:
    ```sh
-   node ~/.boqo-sniper/tools/picks-check.mjs <moment>/pick.json --duration <length> --words <moment>/words.json \
-     --min 15 --max 60 --count-min 1 --count-max 1 > <moment>/checked.json
+   node "$HOME/.boqo-sniper/tools/picks-check.mjs" "<moment>/pick.json" --duration <length> \
+     --words "<moment>/words.json" --min 15 --max 60 --count-min 1 --count-max 1 > "<moment>/checked.json"
    ```
    Read `<moment>/checked.json`.
    - `"ok": false`: fix what its `errors` name in `pick.json`, and check again.
    - `"ok": true`: the pick carries `moved: {s, e}`, how far each edge moved to a word boundary. An edge that moved
-     1 s or more landed somewhere you did not choose: read the words there (`moment.mjs words <moment>/words.json
-     --around <sec>`), set that edge in `pick.json` yourself, and check again, once.
+     1 s or more landed somewhere you did not choose: read the words there (`moment.mjs words
+     "<moment>/words.json" --around <sec>`), set that edge in `pick.json` yourself, and check again, once.
 6. **Render**, then free the disk:
    ```sh
-   node ~/.boqo-sniper/tools/render.mjs --src <moment>/video.mp4 --picks <moment>/checked.json \
-     --words <moment>/words.json --brand "<name>" --out <clips>
+   node "$HOME/.boqo-sniper/tools/render.mjs" --src "<moment>/video.mp4" --picks "<moment>/checked.json" \
+     --words "<moment>/words.json" --brand "<name>" --out "<clips>"
    ```
-   It gives `{"clips": [{file, s, e, title}]}`. Then delete `<moment>/video.mp4`; the small files stay. The layout is
-   `blur` (the whole picture over a blurred fill of itself), which keeps a streamer's facecam in frame; `--layout
-   crop` (a centre crop) only when the person asks.
+   It gives `{"clips": [{file, s, e, title}]}`. Then `rm -f "<moment>/video.mp4"`; the small files stay. The layout is
+   `blur` (the whole picture over a blurred fill of itself), which keeps a streamer's facecam in frame; `--layout crop`
+   (a centre crop) only when the person asks.
 7. **Show it.** One line: the title, the length (`e - s`, in whole seconds) and `<clips>/clip-01.mp4`.
 8. **Post** by the rule (Posting).
 9. **Log.** Append one line to `<home>/boqo-sniper/runs.md`, starting with the local date and time
@@ -166,16 +172,17 @@ quiet.
 ## Posting
 
 `post.md` has the steps. Here they run once per session and then once per clip:
-- **Once, before the first clip is offered or posted,** post.md → Before the first clip: the boqo tools, the plan
-  and the accounts. No boqo tools, or a plan without publishing (say once: "Autoposting comes with the 7-day trial
-  or Starter from $12"): the session goes on without posting, and no clip waits for an answer.
+- **Once, before the first clip is offered or posted,** post.md → Before the first clip, steps 1, 2 and 4: the boqo
+  tools, the plan and the accounts. Its step 3, the rule, runs for each clip as below. No boqo tools, or a plan without
+  publishing (say once: "Autoposting comes with the 7-day trial or Starter from $12"): the session goes on without
+  posting, and no clip waits for an answer.
 - **`ask`:** after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you wait the loop
   is paused: the watch keeps recording and moments queue up for when they answer. Offer the hands-free rule once:
   post automatically, up to N a day, to the accounts they name (onboarding.md → The posting rule writes it). A no,
   or "later": the clip stays on disk; back to the loop.
 - **`{"auto": N}`:** today's posts so far are
   ```sh
-  grep "^$(date +%F) " <home>/boqo-sniper/runs.md | grep -cF "| posted 1"
+  grep "^$(date +%F) " "<home>/boqo-sniper/runs.md" | grep -cF "| posted 1"
   ```
   (it prints `0`, and exits 1, when there are none). Fewer than N: post the clip with no question to the config's
   `accounts`, then one line saying where it went. N reached: keep clipping, and say once that today's posts are
@@ -188,7 +195,7 @@ quiet.
 
 **Stop.** When the person says stop (or end, enough, that's it): finish the moment in hand, if any, then
 ```sh
-node ~/.boqo-sniper/tools/stop.mjs <channel>
+node "$HOME/.boqo-sniper/tools/stop.mjs" "<channel>"
 ```
 `{"stopped": true, …}` returns once the watcher is gone; `{"stopped": false, …}` means nothing was running. Then the
 report. Moments the watcher had cut and you had not judged yet stay where they are (the next watch of the channel
@@ -204,7 +211,7 @@ loop on each, until it says `stopped`.
 Then:
 1. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, and the
    folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in `runs.md` with
-   `grep -F "<channel> <session name> |" <home>/boqo-sniper/runs.md | grep -cF "<what>"`, `<what>` being `| clip `,
+   `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -cF "<what>"`, `<what>` being `| clip `,
    `| skip |` and `| posted 1`. The moments are `status.mjs`'s `moments`; those left are the moments minus the clip
    and skip lines.
 2. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
@@ -227,3 +234,4 @@ so, and offer to restart now (Stop, then Starting, step 4), which starts a fresh
 | "`{"stopped": …}`, so all went well" | `failed` carries an `error`: say it, and offer to start again |
 | "A YouTube or Kick stream is close enough" | Twitch only in this beta |
 | "The watcher failed, I'll capture it myself with yt-dlp" | Say the error. The watcher is the only capture |
+| "`M=…` once, then `$M` in every command" | The variable is gone in the next command. Write the path out |
