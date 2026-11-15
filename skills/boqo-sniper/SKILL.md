@@ -162,7 +162,8 @@ Repeat until The end.
 8. **Post** by the rule (Posting).
 9. **Log.** Append one line to `<home>/boqo-sniper/runs.md`, starting with the local date and time
    (`date "+%F %H:%M"`):
-   - a clip: `<YYYY-MM-DD HH:MM> | <channel> <session name> | <moment name> | clip <n> s | <title> | <clip file> | posted <0 or 1>`;
+   - a clip: `<YYYY-MM-DD HH:MM> | <channel> <session name> | <moment name> | clip <n> s | <title> | <clip file> | posted 0`,
+     or, once posted, `… | posted 1 <projectId>`;
    - a skip: `<YYYY-MM-DD HH:MM> | <channel> <session name> | <moment name> | skip | <reason>`.
 
 **The status line.** Every 10 moments, or every 30 minutes since the last thing you told the person, whichever comes
@@ -171,11 +172,15 @@ quiet.
 
 ## Posting
 
-`post.md` has the steps. Here they run once per session and then once per clip:
+`post.md` has the steps. Here there is one clip per moment, so its batch wording ("best first", telling what went
+after a batch) does not apply. Its steps run once per session, then once per clip:
 - **Once, before the first clip is offered or posted,** post.md → Before the first clip, steps 1, 2 and 4: the boqo
-  tools, the plan and the accounts. Its step 3, the rule, runs for each clip as below. No boqo tools, or a plan without
-  publishing (say once: "Autoposting comes with the 7-day trial or Starter from $12"): the session goes on without
-  posting, and no clip waits for an answer.
+  tools, the plan and the accounts. Its step 3, the rule, runs for each clip as below. Posting is off for the rest of
+  the session, and no clip waits for an answer, when:
+  - there are no boqo tools;
+  - the plan has no publishing: say once, "Autoposting comes with the 7-day trial or Starter from $12";
+  - no account is active: say once that they connect or reconnect one in boqo, under Accounts. When they say it is
+    connected, run steps 2 and 4 again.
 - **`ask`:** after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you wait the loop
   is paused: the watch keeps recording and moments queue up for when they answer. Offer the hands-free rule once:
   post automatically, up to N a day, to the accounts they name (onboarding.md → The posting rule writes it). A no,
@@ -189,7 +194,11 @@ quiet.
   done. No `accounts` in the config: ask once which accounts, and save them into `config.json`; until they answer,
   this clip goes by `ask`.
 - Each post: post.md → Each clip, with `<clips>` as its folder (the reply file goes there and is deleted after the
-  upload).
+  upload). Keep the `projectId` from its step 4: it goes into the clip's line in `runs.md` (The loop, step 9).
+- **A plan refusal in the middle of a session** ("Accounts and scheduling are on paid plans." from `create_upload`,
+  or "Publishing needs a paid plan." from `post_video`): posting is off for the rest of the session. Say the plan
+  line once; the watch and the loop go on clipping, and no clip waits for an answer. post.md's "stops them all" means
+  the posts, never the watch. Any other refusal stops only that clip's post (post.md → Refusals).
 
 ## The end
 
@@ -209,13 +218,17 @@ loop on each, until it says `stopped`.
   (Starting, step 3).
 
 Then:
-1. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, and the
-   folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in `runs.md` with
-   `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -cF "<what>"`, `<what>` being `| clip `,
-   `| skip |` and `| posted 1`. The moments are `status.mjs`'s `moments`; those left are the moments minus the clip
-   and skip lines.
-2. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
-3. `offline`: offer to start again when the channel is back live.
+1. **The posts.** For each clip posted this session (its line ends `| posted 1 <projectId>`:
+   `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -F "| posted 1 "`), `get_project
+   {projectId}`. `queued`, `processing` or `ready` is fine. `failed`: that clip will not be posted; the report names
+   it with its error, the text inside the reply's `<data kind="project_error">` tag.
+2. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, any post
+   that failed (step 1), and the folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in
+   `runs.md` with `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -cF "<what>"`, `<what>`
+   being `| clip `, `| skip |` and `| posted 1`. The moments are `status.mjs`'s `moments`; those left are the moments
+   minus the clip and skip lines.
+3. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
+4. `offline`: offer to start again when the channel is back live.
 
 **Changing the sensitivity.** "More moments" or "fewer": the `sensitivity` in `config.json`, 30 to 95 (70 by
 default; higher catches more, and sound alone counts only from 70 up), in steps of 10. It applies to a new watch: say
@@ -231,6 +244,7 @@ so, and offer to restart now (Stop, then Starting, step 4), which starts a fresh
 | "I'll keep the moment's video in case they want a redo" | Delete `video.mp4` once judged: 140 MB a moment fills a disk in an evening |
 | "I'll read chat.json to see what happened" | `moment.mjs read`. The whole file is hundreds of KB |
 | "They said stop, but three moments are queued: I'll finish them" | Stop is quick. The queue waits unless they ask to finish it |
+| "Publishing needs a paid plan, so the session is over" | Posting is off; the watch and the clipping go on |
 | "`{"stopped": …}`, so all went well" | `failed` carries an `error`: say it, and offer to start again |
 | "A YouTube or Kick stream is close enough" | Twitch only in this beta |
 | "The watcher failed, I'll capture it myself with yt-dlp" | Say the error. The watcher is the only capture |

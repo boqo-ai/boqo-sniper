@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ 2741352; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ bf31f0c; keep in step -->
 # Posting through boqo
 
 Runs after a clip is shown (SKILL.md → The loop, step 8, and Posting). It posts only through boqo's tools, and only by
