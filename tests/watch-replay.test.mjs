@@ -250,3 +250,71 @@ test("a channel that is offline from the start also ends after 10 offline polls"
     await fs.rm(work, { recursive: true, force: true });
   }
 });
+
+/** Wait until the watcher's session folder has its pid file and status; returns the folder. */
+async function waitForSession(home, channel) {
+  const root = path.join(home, "boqo-sniper", channel);
+  for (let i = 0; i < 100; i++) {
+    try {
+      const names = await fs.readdir(root);
+      if (names[0]) {
+        await fs.access(path.join(root, names[0], "watch.pid"));
+        await fs.access(path.join(root, names[0], "status.json"));
+        return path.join(root, names[0]);
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.fail("the watcher never created its session folder");
+}
+
+/** What a failed run must leave: exit 1, one {"error"} line, status "failed" with that error, no pid, and next/status saying so. */
+async function assertFailed(r, session, channel, env, pattern) {
+  assert.equal(r.code, 1, r.stderr);
+  assert.equal(r.stdout.trim().split("\n").length, 1, "one JSON line on stdout");
+  assert.match(r.json.error, pattern);
+  const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+  assert.equal(status.state, "failed");
+  assert.equal(status.error, r.json.error, "status.json carries the same error");
+  await assert.rejects(fs.access(path.join(session, "watch.pid")), "the pid file goes with the process");
+  const n = await run(NEXT, [channel, "--timeout", "5"], env);
+  assert.equal(n.code, 0);
+  assert.deepEqual(n.json, { stopped: "failed", error: r.json.error });
+  const s = await run(STATUS, [channel], env);
+  assert.equal(s.json.state, "failed");
+  assert.equal(s.json.error, r.json.error);
+}
+
+test("a replay source that cannot be read fails, and status.json says why", { timeout: 60000 }, async () => {
+  const work = await tmp("badsrc");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 2);
+    await fs.writeFile(path.join(work, "chat.jsonl"), "this is not json\n");
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100" };
+    const r = await run(WATCH, ["badsrc", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    await assertFailed(r, await onlySession(home, "badsrc"), "badsrc", env, /^replay: /);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a source that errors mid-run fails the watcher: status.json and next say failed, with the error", { timeout: 120000 }, async () => {
+  const work = await tmp("midfail");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 8);
+    await makeChat(path.join(work, "chat.jsonl"), 80, null);
+    // 10 simulated seconds per real second: segment 6 is read about 6 s after the start
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_REPLAY_SPEED: "10" };
+    const watching = run(WATCH, ["midfail", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    const session = await waitForSession(home, "midfail");
+    await fs.rm(path.join(work, "segs", "006.ts"));
+    const r = await watching;
+    await assertFailed(r, session, "midfail", env, /ENOENT|no such file/i);
+    const buf = (await fs.readdir(path.join(session, "buf"))).filter((f) => f.endsWith(".ts"));
+    assert.deepEqual(buf, [], "a failed run still empties its buffer");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});

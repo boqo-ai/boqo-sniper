@@ -6,13 +6,14 @@ a weak clip costs their account more than a skipped moment costs them.
 
 ## What you read
 
-- **The summary** (SKILL.md → Helpers → Read a moment):
-  - where the peak sits in the file;
-  - chat per 10 s across the whole file;
-  - the lines chat repeated most around the peak;
-  - the transcript, with a `◆ peak` line where the peak falls.
-- **The frames** (SKILL.md → Helpers → Frames), when you can read images: four stills from before the peak to
-  after it.
+What `moment.mjs` gave you (SKILL.md → The loop, step 3):
+- **`read`:**
+  - `meta.peakOffsetSec`, where the peak sits in the file;
+  - `meta.reason`, `chat`, `audio` or `both`;
+  - `topChat`, what chat repeated most around the peak;
+  - `chatPerSec`, how chat ran over the whole file, 10 s at a time.
+- **`words`:** the transcript, line by line.
+- **`frames`:** two stills, 6 s before the peak and 2 s after it, when you can read images.
 
 Times are seconds in the moment's file, about 160 s long, with the peak about 125 s in. Chat reacts 2 to 10 s after
 what caused it, so the cause sits before the peak.
@@ -53,10 +54,12 @@ When in doubt, skip.
 
 - `s` and `e` are seconds in the moment's file: `0 <= s < e <=` its length, and `e - s` is 15 to 60 s. 20 to 40 s
   suits most stream moments.
-- `s`: the start of the setup. When it starts with speech, put `s` a little inside its first word (the word's
-  start plus 0.05), not between words.
+- `s`: the start of the setup. When it starts with speech, put `s` a little inside the line's first word: the
+  line's start time plus 0.05, not between words.
 - `e`: after the payoff and the streamer's first reaction to it, before the next topic. When the last thing is
-  speech, put `e` a little inside its last word (the word's end minus 0.05).
+  speech, put `e` a little inside that line's last word: its end time minus 0.05.
+- Each `words` line ends `(start-end)` in seconds: those are the numbers to use. `--around <sec>` shows the words
+  near one second when you need a closer look.
 - `picks-check.mjs` moves an edge out to the nearest word's boundary when one is within 1.5 s; an edge in gameplay
   or music with no words near it stays where you put it.
 

@@ -11,7 +11,9 @@
 //   status.json  watch.pid   `stop` is written by stop.mjs
 //
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
-// offline), or {"error": "..."} and exit 1. Stderr is for humans.
+// offline), or {"error": "..."} and exit 1. Stderr is for humans. A run that
+// fails after its session folder exists also leaves status.json at
+// {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
 // Timeline: wall-clock epoch seconds, for chat, buckets, peakAt and every
 // segment. A segment's start is read from its own name (ffmpeg's strftime
@@ -55,6 +57,30 @@ const STALL_SEC = 60;
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
   process.exit(1);
+}
+
+/** The session this process owns (its watch.pid is ours), once it has one. */
+let owned = null;
+
+/** Fail a run whose session exists: status.json says failed and why, the pid file goes, then {"error"} and exit 1. */
+async function failSession(message) {
+  if (owned) {
+    const now = new Date().toISOString();
+    try {
+      await writeJsonAtomic(path.join(owned.dir, "status.json"), {
+        state: "failed",
+        channel: owned.channel,
+        since: now,
+        segments: 0,
+        moments: owned.moments ?? 0,
+        chatPerSec: 0,
+        updatedAt: now,
+        error: message,
+      });
+    } catch {}
+    await fs.rm(path.join(owned.dir, "watch.pid"), { force: true }).catch(() => {});
+  }
+  fail(message);
 }
 
 export function parseArgs(argv) {
@@ -346,6 +372,7 @@ async function main() {
   } catch (err) {
     fail(err.code === "EEXIST" ? `already watching ${channel} (${dir})` : err.message);
   }
+  owned = { dir, channel, moments: 0 };
 
   // Replay material is read up front so a bad path fails before anything runs.
   let replayFiles = [];
@@ -364,8 +391,7 @@ async function main() {
           .sort((a, b) => a.t - b.t);
       }
     } catch (err) {
-      await fs.rm(path.join(dir, "watch.pid"), { force: true });
-      fail(`replay: ${err.message}`);
+      await failSession(`replay: ${err.message}`);
     }
     // The simulated timeline starts now and runs ahead of the real one.
     replayBase = Math.floor(Date.now() / 1000);
@@ -388,6 +414,7 @@ async function main() {
   let stopRequested = false;
   let capture = null;
   let warnedTz = false;
+  let failMessage = null;
 
   const setState = (s) => {
     if (s !== state) {
@@ -410,6 +437,7 @@ async function main() {
         moments,
         chatPerSec: Math.round((recent / 30) * 10) / 10,
         updatedAt: iso(now),
+        ...(state === "failed" ? { error: failMessage } : {}),
       },
       { quiet: true },
     );
@@ -541,6 +569,7 @@ async function main() {
         endAt: end,
       });
       moments++;
+      if (owned) owned.moments = moments;
     } catch (err) {
       console.error(`cut failed: ${err.message}`);
       await fs.rm(momentDir, { recursive: true, force: true });
@@ -683,7 +712,8 @@ async function main() {
   } catch (err) {
     exitError ??= err;
   }
-  setState(exitError ? "stopped" : stopped ? "stopped" : "offline");
+  if (exitError) failMessage = exitError.message || String(exitError);
+  setState(exitError ? "failed" : stopped ? "stopped" : "offline");
   if (!keepBuf) {
     for (const s of segs.splice(0)) await unlinkRetry(path.join(bufDir, s.name));
   }
@@ -691,8 +721,8 @@ async function main() {
   await fs.rm(path.join(dir, "watch.pid"), { force: true });
   await fs.rm(stopFile, { force: true });
 
-  if (exitError) fail(exitError.message);
+  if (exitError) fail(failMessage);
   process.stdout.write(JSON.stringify({ state, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
 }
 
-main().catch((err) => fail(err.message));
+main().catch((err) => failSession(err?.message || String(err)));

@@ -133,6 +133,38 @@ test("stopped and offline watchers are reported", async () => {
   }
 });
 
+test("a failed watcher is reported with its error", async () => {
+  await withHome(async () => {
+    const session = await newSession("chan");
+    await fs.writeFile(path.join(session, "status.json"), JSON.stringify({ state: "failed", channel: "chan", error: "ffmpeg exited 1" }));
+    const r = await runNext(["chan", "--timeout", "30"]);
+    assert.equal(r.code, 0);
+    assert.deepEqual(r.json, { stopped: "failed", error: "ffmpeg exited 1" });
+    assert.ok(r.ms < 5000, `took ${r.ms} ms`);
+  });
+});
+
+test("a failed status with no error text still says failed", async () => {
+  await withHome(async () => {
+    const session = await newSession("chan");
+    await setStatus(session, "failed");
+    const r = await runNext(["chan", "--timeout", "30"]);
+    assert.deepEqual(r.json, { stopped: "failed", error: "unknown error" });
+  });
+});
+
+test("a ready moment is still handed out after the watcher failed", async () => {
+  await withHome(async () => {
+    const session = await newSession("chan");
+    const dir = await addMoment(session, "20261115-100000", { score: 7 });
+    await fs.writeFile(path.join(session, "status.json"), JSON.stringify({ state: "failed", channel: "chan", error: "boom" }));
+    const first = await runNext(["chan", "--timeout", "30"]);
+    assert.equal(first.json.moment, dir);
+    const again = await runNext(["chan", "--timeout", "30"]);
+    assert.deepEqual(again.json, { stopped: "failed", error: "boom" });
+  });
+});
+
 test("a ready moment is still handed out after the watcher stopped", async () => {
   await withHome(async () => {
     const session = await newSession("chan");

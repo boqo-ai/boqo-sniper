@@ -18,7 +18,8 @@ post.
 minutes, or this chat closes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
 two chats, as many as the PC carries.
 
-- **Tools:** `node ~/.boqo-sniper/tools/<tool>.mjs`, always by that path.
+- **Tools:** `node ~/.boqo-sniper/tools/<tool>.mjs`, always by that path. Commands are for a POSIX shell (macOS,
+  Linux, and on Windows Git Bash or WSL).
 - **`<home>`:** `$BOQO_HOME`, or `~/.boqo` when it is unset (`echo "${BOQO_HOME:-$HOME/.boqo}"`). Brand kits live in
   `<home>/brands/` and are shared by every boqo skill. This skill's own files: `<home>/boqo-sniper/config.json` (the
   posting rule and the sensitivity) and `<home>/boqo-sniper/runs.md` (one line per moment).
@@ -27,8 +28,7 @@ two chats, as many as the PC carries.
   name, `<session name>`, is its UTC start. `status.mjs` prints it as `session`.
 - **`<moment>`:** a folder `next.mjs` hands you, inside `<session>/moments/`. Its name, `<moment name>`, is the
   peak's UTC second. It holds `video.mp4` (about 160 s at the stream's quality, about 140 MB, the peak about 125 s
-  in), `chat.json` (every chat line, `t` in seconds from the file's start) and `meta.json` (`peakOffsetSec`,
-  `score`, `reason`).
+  in), `chat.json` (every chat line) and `meta.json` (`peakOffsetSec`, `score`, `reason`).
 - **`<clips>`:** `<home>/boqo-sniper/clips/<channel>/<moment name>/`, where the clip lands as `clip-01.mp4`. It sits
   outside `<session>` because the next watch of the channel deletes moments older than a day.
 
@@ -43,6 +43,8 @@ two chats, as many as the PC carries.
   Twitch only, and stop.
 - **Quiet while waiting.** A `timeout` from `next.mjs` is not news: call it again and say nothing. The person hears
   about clips, the status line, and the end.
+- **The watcher ending is news.** In Claude Code, when the background task running `watch.mjs` completes, run
+  `status.mjs <channel>` at once: its `state` (`stopped`, `offline` or `failed`, with `error`) goes to The end.
 - **The person's language.** Answer in the language the person writes in. Titles are in the stream's language.
   Files stay in English.
 - **Short messages:** what happened, what comes next. No tour of the tools unless asked.
@@ -79,16 +81,10 @@ two chats, as many as the PC carries.
      ```sh
      node ~/.boqo-sniper/tools/watch.mjs <channel> --sensitivity <n>
      ```
-   - Another agent on macOS or Linux, detached:
+   - Another agent (macOS, Linux, or Windows in Git Bash or WSL), detached:
      ```sh
      mkdir -p <home>/boqo-sniper
      nohup node ~/.boqo-sniper/tools/watch.mjs <channel> --sensitivity <n> > <home>/boqo-sniper/<channel>.log 2>&1 &
-     ```
-   - Another agent in Windows PowerShell:
-     ```powershell
-     $h = if ($env:BOQO_HOME) { $env:BOQO_HOME } else { "$HOME\.boqo" }
-     New-Item -ItemType Directory -Force "$h\boqo-sniper" | Out-Null
-     Start-Process -WindowStyle Hidden -FilePath node -ArgumentList "$HOME\.boqo-sniper\tools\watch.mjs","<channel>","--sensitivity","<n>" -RedirectStandardOutput "$h\boqo-sniper\<channel>.log" -RedirectStandardError "$h\boqo-sniper\<channel>.err.log"
      ```
 5. **Check it runs.** `node ~/.boqo-sniper/tools/status.mjs <channel>` about every 10 s, for up to a minute, until
    `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute. Keep its
@@ -114,32 +110,40 @@ Repeat until The end.
    ```
    - `{"moment": "<moment>", "meta": {…}}`: go on with step 2.
    - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 3 minutes
-     old, the watcher died without saying so: run `stop.mjs <channel>` (it cleans up), tell the person, offer to
-     start again (Starting, step 3), and go to The end.
-   - `{"stopped": "<state>"}`: The end.
+     old, the watcher died without a word: run `stop.mjs <channel>` (it cleans up), tell the person, offer to start
+     again (Starting, step 3), and go to The end.
+   - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end.
 2. **Transcribe.**
    ```sh
    node ~/.boqo-sniper/tools/asr.mjs <moment>/video.mp4 --out <moment>/words.json
    ```
-   Then Helpers → Drop sound tags on `<moment>/words.json`: whisper writes sounds as words, `(upbeat music)`, and a
-   clip would burn them into its captions. `{"words": 0, …}` is a moment with no speech, gameplay or music only:
-   judge it on chat and the frames.
-3. **Read it.** Helpers → Read a moment, and Helpers → Frames when you can read images. Never read `chat.json` or
-   `words.json` whole: a busy chat writes hundreds of KB.
+   `{"words": 0, …}` is a moment with no speech, gameplay or music only: judge it on chat and the frames.
+3. **Read it**, with the moment tool. Never read `chat.json` or `words.json` whole: a busy chat writes hundreds of KB.
+   ```sh
+   node ~/.boqo-sniper/tools/moment.mjs read <moment>
+   node ~/.boqo-sniper/tools/moment.mjs words <moment>/words.json
+   node ~/.boqo-sniper/tools/moment.mjs frames <moment>/video.mp4 --at <peakOffsetSec> --out <moment>
+   ```
+   - `read` gives `meta`, `topChat` (the 8 messages chat repeated most, from 15 s before the peak to 25 s after it,
+     with their counts), `chatPerSec` (messages a second in each 10 s of the file, from its start) and
+     `durationSec` (the file's length).
+   - `words` gives the transcript as `lines`, each `[m:ss] text (start-end)`: where it starts, and its first and
+     last word's exact times in seconds.
+   - `frames` writes two stills, 6 s before the peak and 2 s after it: look at both `frames[].file` when you can
+     read images.
 4. **Judge** by `judge.md`, and write `<moment>/judge.json`. A `skip`: delete `<moment>/video.mp4`, log it (step 9),
    and go back to step 1.
 5. **Check the edges.** Write `<moment>/pick.json`, `[{"s": …, "e": …, "title": "…"}]` (with `"hook"` when the
-   verdict has one). Then the file's length, and the check:
+   verdict has one). Then, with `<length>` the `durationSec` from step 3:
    ```sh
-   ffprobe -v error -show_entries format=duration -of csv=p=0 "<moment>/video.mp4"
    node ~/.boqo-sniper/tools/picks-check.mjs <moment>/pick.json --duration <length> --words <moment>/words.json \
      --min 15 --max 60 --count-min 1 --count-max 1 > <moment>/checked.json
    ```
    Read `<moment>/checked.json`.
    - `"ok": false`: fix what its `errors` name in `pick.json`, and check again.
    - `"ok": true`: the pick carries `moved: {s, e}`, how far each edge moved to a word boundary. An edge that moved
-     1 s or more landed somewhere you did not choose: look at the words there (Helpers → Words around a time), set
-     that edge in `pick.json` yourself, and check again, once.
+     1 s or more landed somewhere you did not choose: read the words there (`moment.mjs words <moment>/words.json
+     --around <sec>`), set that edge in `pick.json` yourself, and check again, once.
 6. **Render**, then free the disk:
    ```sh
    node ~/.boqo-sniper/tools/render.mjs --src <moment>/video.mp4 --picks <moment>/checked.json \
@@ -150,7 +154,8 @@ Repeat until The end.
    crop` (a centre crop) only when the person asks.
 7. **Show it.** One line: the title, the length (`e - s`, in whole seconds) and `<clips>/clip-01.mp4`.
 8. **Post** by the rule (Posting).
-9. **Log.** Append one line to `<home>/boqo-sniper/runs.md`:
+9. **Log.** Append one line to `<home>/boqo-sniper/runs.md`, starting with the local date and time
+   (`date "+%F %H:%M"`):
    - a clip: `<YYYY-MM-DD HH:MM> | <channel> <session name> | <moment name> | clip <n> s | <title> | <clip file> | posted <0 or 1>`;
    - a skip: `<YYYY-MM-DD HH:MM> | <channel> <session name> | <moment name> | skip | <reason>`.
 
@@ -168,64 +173,46 @@ quiet.
   is paused: the watch keeps recording and moments queue up for when they answer. Offer the hands-free rule once:
   post automatically, up to N a day, to the accounts they name (onboarding.md → The posting rule writes it). A no,
   or "later": the clip stays on disk; back to the loop.
-- **`{"auto": N}`:** post the clip with no question while today's clips with `posted 1` in `runs.md` are fewer than
-  N, to the config's `accounts`; then one line saying where it went. N reached: keep clipping, and say once that
-  today's posts are done.
+- **`{"auto": N}`:** today's posts so far are
+  ```sh
+  grep "^$(date +%F) " <home>/boqo-sniper/runs.md | grep -cF "| posted 1"
+  ```
+  (it prints `0`, and exits 1, when there are none). Fewer than N: post the clip with no question to the config's
+  `accounts`, then one line saying where it went. N reached: keep clipping, and say once that today's posts are
+  done. No `accounts` in the config: ask once which accounts, and save them into `config.json`; until they answer,
+  this clip goes by `ask`.
 - Each post: post.md → Each clip, with `<clips>` as its folder (the reply file goes there and is deleted after the
   upload).
 
 ## The end
 
-**Stop.** When the person says stop (or end, enough, that's it):
+**Stop.** When the person says stop (or end, enough, that's it): finish the moment in hand, if any, then
 ```sh
 node ~/.boqo-sniper/tools/stop.mjs <channel>
 ```
-`{"stopped": true, …}` returns once the watcher is gone; `{"stopped": false, …}` means nothing was running. Then
-`next.mjs` hands out the moments the watcher had already cut, at once: judge and render them as usual, until it
-says `stopped`. When the person wants to end right away, delete those moments' `video.mp4` instead.
+`{"stopped": true, …}` returns once the watcher is gone; `{"stopped": false, …}` means nothing was running. Then the
+report. Moments the watcher had cut and you had not judged yet stay where they are (the next watch of the channel
+deletes them after a day); the report says how many. When the person says to finish them, run `next.mjs` and the
+loop on each, until it says `stopped`.
 
-**`{"stopped": …}`.** The watch is over: `stopped` after a stop, `offline` after 10 minutes with the stream offline.
-1. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, and the folder
-   `<home>/boqo-sniper/clips/<channel>/`. Count from this session's lines in `runs.md`
-   (`grep "<channel> <session name>" <home>/boqo-sniper/runs.md`: `| clip`, `| skip`, `posted 1`).
+**`{"stopped": …}`.** The watch is over:
+- `stopped`: after a stop;
+- `offline`: the stream was offline for 10 minutes;
+- `failed`: the watcher ended on an error. Tell the person the `error` in one line, and offer to start again
+  (Starting, step 3).
+
+Then:
+1. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, and the
+   folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in `runs.md` with
+   `grep -F "<channel> <session name> |" <home>/boqo-sniper/runs.md | grep -cF "<what>"`, `<what>` being `| clip `,
+   `| skip |` and `| posted 1`. The moments are `status.mjs`'s `moments`; those left are the moments minus the clip
+   and skip lines.
 2. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
 3. `offline`: offer to start again when the channel is back live.
 
 **Changing the sensitivity.** "More moments" or "fewer": the `sensitivity` in `config.json`, 30 to 95 (70 by
 default; higher catches more, and sound alone counts only from 70 up), in steps of 10. It applies to a new watch: say
 so, and offer to restart now (Stop, then Starting, step 4), which starts a fresh buffer.
-
-## Helpers
-
-**Read a moment** (`<moment>` as the argument): the peak, chat per 10 s, the lines chat repeated most from 15 s
-before the peak to 25 s after it, and the transcript in lines of about 8 s with `◆` where the peak falls.
-
-```sh
-node -e "const f=require('fs'),p=require('path'),d=process.argv[1],r=n=>JSON.parse(f.readFileSync(p.join(d,n),'utf8'));const m=r('meta.json'),c=r('chat.json'),w=r('words.json'),k=m.peakOffsetSec,ts=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');console.log('peak at '+ts(k)+' ('+k+' s), '+m.reason+', score '+m.score+', '+c.length+' chat lines');const b=[];c.forEach(x=>{const i=Math.floor(x.t/10);b[i]=(b[i]||0)+1});console.log('chat per 10 s: '+Array.from(b,(n,i)=>ts(i*10)+' '+(n||0)).join(' | '));const t={};c.filter(x=>x.t>=k-15&&x.t<k+25).forEach(x=>{const s=String(x.text||'').toLowerCase().split(/\s+/).filter((y,i,a)=>y&&y!==a[i-1]).join(' ').slice(0,80);if(s){t[s]=t[s]||{s,n:0,at:x.t};t[s].n++}});console.log('top chat around the peak:');Object.values(t).sort((a,z)=>z.n-a.n).slice(0,15).forEach(x=>console.log('  '+x.n+'x '+JSON.stringify(x.s)+' from '+ts(x.at)));console.log('transcript:'+(w.length?'':' (no speech)'));let l=null,pk=false;const out=()=>{if(!pk&&l.s>k){console.log('['+ts(k)+'] ◆ peak');pk=true}console.log('['+ts(l.s)+'] '+l.t.join(' '))};w.forEach(x=>{if(l&&x.s>=l.s+8){out();l=null}if(!l)l={s:x.s,t:[]};l.t.push(x.w)});if(l)out();if(!pk)console.log('['+ts(k)+'] ◆ peak')" "<moment>"
-```
-
-**Frames:** four stills, at 30, 12 and 5 s before the peak and 5 s after it, in one picture. `<a>`, `<b>`, `<c>`,
-`<d>` are `peakOffsetSec` − 30, − 12, − 5 and + 5 (none below 0). Then read `<moment>/frames.jpg`.
-
-```sh
-ffmpeg -v error -y -ss <a> -i "<moment>/video.mp4" -ss <b> -i "<moment>/video.mp4" -ss <c> -i "<moment>/video.mp4" \
-  -ss <d> -i "<moment>/video.mp4" -filter_complex \
-  "[0:v]scale=640:360[a];[1:v]scale=640:360[b];[2:v]scale=640:360[c];[3:v]scale=640:360[d];[a][b]hstack[t];[c][d]hstack[u];[t][u]vstack" \
-  -frames:v 1 "<moment>/frames.jpg"
-```
-
-**Drop sound tags** (rewrites the file without whisper's bracketed sounds, `(upbeat music)`, `[Laughter]`; prints
-how many it dropped):
-
-```sh
-node -e "const f=require('fs'),p=process.argv[1],w=JSON.parse(f.readFileSync(p,'utf8')),t=i=>String(w[i].w).trim(),k=[];for(let i=0;i<w.length;i++){if(/^[(\[]/.test(t(i))){let j=i;while(j<w.length&&j<i+6&&!/[)\]][.,!?]*$/.test(t(j)))j++;if(j<w.length&&j<i+6){i=j;continue}}k.push(w[i])}f.writeFileSync(p,JSON.stringify(k));console.log(JSON.stringify({words:k.length,dropped:w.length-k.length}))" "<moment>/words.json"
-```
-
-**Words around a time** (`<sec>` in seconds; each line is `start end word`):
-
-```sh
-node -e "const w=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')),t=+process.argv[2];console.log(w.filter(x=>x.s>t-8&&x.s<t+8).map(x=>x.s+' '+x.e+' '+x.w).join('\n'))" "<moment>/words.json" <sec>
-```
 
 ## Red flags
 
@@ -235,7 +222,8 @@ node -e "const w=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')),
 | "Nine minutes and nothing: I'll tell them it's quiet" | A `timeout` is silent. The status line comes every 10 moments or 30 minutes |
 | "The person said 'nice', so I'll post it" | Only the rule posts. With `ask`, a post needs a yes to posting |
 | "I'll keep the moment's video in case they want a redo" | Delete `video.mp4` once judged: 140 MB a moment fills a disk in an evening |
-| "I'll read chat.json to see what happened" | Helpers → Read a moment. The whole file is hundreds of KB |
-| "The watcher stopped, so the session is over" | `next.mjs` still hands out the moments already cut; judge them, then report |
+| "I'll read chat.json to see what happened" | `moment.mjs read`. The whole file is hundreds of KB |
+| "They said stop, but three moments are queued: I'll finish them" | Stop is quick. The queue waits unless they ask to finish it |
+| "`{"stopped": …}`, so all went well" | `failed` carries an `error`: say it, and offer to start again |
 | "A YouTube or Kick stream is close enough" | Twitch only in this beta |
 | "The watcher failed, I'll capture it myself with yt-dlp" | Say the error. The watcher is the only capture |

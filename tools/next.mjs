@@ -6,6 +6,7 @@
 // One JSON line on stdout:
 //   {"moment": "<dir>", "meta": {...}}   a moment, now claimed with `.taken`
 //   {"stopped": "<state>"}               watcher offline/stopped, or no session
+//   {"stopped": "failed", "error": "..."} the watcher ended on an error
 //   {"timeout": true, "status": {...}}   nothing came in time
 // Never waits past 540 s: Claude Code caps one shell command at 600 s.
 
@@ -113,6 +114,10 @@ async function main() {
       const status = await readStatus(session);
       if (status && (status.state === "offline" || status.state === "stopped")) {
         console.log(JSON.stringify({ stopped: status.state }));
+        return;
+      }
+      if (status && status.state === "failed") {
+        console.log(JSON.stringify({ stopped: "failed", error: String(status.error ?? "unknown error") }));
         return;
       }
       const left = deadline - Date.now();
