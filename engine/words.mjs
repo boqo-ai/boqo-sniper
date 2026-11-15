@@ -12,9 +12,30 @@ const MIN_WORD_SEC = 0.01;
 const round3 = (x) => Math.round(x * 1000) / 1000;
 const num = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
 
+// A speaker change is `>>` (also `&gt;&gt;`, or a lone `>`), alone or glued to
+// the word that follows. A speaker dash is a `-` alone, or `- ` opening an event.
+const MARK_ONLY = /^(?:>|&gt;)+$/;
+const MARK_LEAD = /^(?:>>+|(?:&gt;){2,})\s*/;
+const DASH_LEAD = /^-\s+/;
+
+/**
+ * The seg text without a speaker mark ('' when nothing is left). A mark inside
+ * a word, and hyphens that belong to a word (`well-known`, `-5`), stay.
+ * @param {string} text trimmed
+ * @param {boolean} atStart no speech seg has come yet in this event
+ */
+function speakerStripped(text, atStart) {
+  let t = text;
+  if (MARK_ONLY.test(t)) return '';
+  t = t.replace(MARK_LEAD, '');
+  if (atStart) t = t.replace(DASH_LEAD, '');
+  return t === '-' || MARK_ONLY.test(t) ? '' : t;
+}
+
 /**
  * Words from a YouTube json3 caption track. Sound tags (`[Music]`,
- * `[Applause]`) are dropped as in `wordsFromWhisper`. Each seg starts at
+ * `[Applause]`) are dropped as in `wordsFromWhisper`, and so are speaker
+ * marks (`>>`, a speaker dash); a dropped mark gives its time to no one. Each seg starts at
  * `tStartMs + tOffsetMs`. A word ends where the next one starts, and never
  * runs longer than one second; the last word ends at its event's end, also
  * capped.
@@ -28,9 +49,11 @@ export function wordsFromJson3(j) {
     const t0 = num(ev?.tStartMs);
     if (t0 === null || !Array.isArray(ev.segs)) continue;
     const d = num(ev.dDurationMs);
+    let atStart = true;
     for (const seg of ev.segs) {
-      const text = typeof seg?.utf8 === 'string' ? seg.utf8.trim() : '';
+      const text = speakerStripped(typeof seg?.utf8 === 'string' ? seg.utf8.trim() : '', atStart);
       if (!text) continue;
+      atStart = false;
       const startMs = t0 + (num(seg.tOffsetMs) ?? 0);
       raw.push({ w: text, startMs, endMs: d === null ? null : t0 + d });
     }
@@ -256,4 +279,50 @@ export function transcriptChunks(words, opts = {}) {
 export function transcriptMarkdown(words, opts) {
   const chunks = transcriptChunks(words, opts);
   return { text: chunks.length ? chunks.join('\n\n') + '\n' : '', chunks: chunks.length };
+}
+
+const LINE_MAX_SEC = 8;
+const PAUSE_SEC = 0.7;
+const AROUND_SPAN_SEC = 30;
+
+const minSec = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const sec2 = (s) => (Math.round(s * 100) / 100).toFixed(2);
+
+/**
+ * The words near a time, as the lines the agent reads to set a clip edge:
+ * every word overlapping [around - span, around + span] (from clamped at 0),
+ * grouped into lines of `[m:ss] text (start-end)`, the seconds exact to 0.01.
+ * A line closes after a word ending a sentence, at a pause over 0.7 s, or once
+ * it is 8 s long. Blank and malformed words are skipped; `words` need not be
+ * sorted.
+ * @param {Word[]} words
+ * @param {number} around seconds
+ * @param {number} [span] seconds each side, default 30
+ * @returns {{ lines: string[], from: number, to: number }}
+ */
+export function wordsAround(words, around, span = AROUND_SPAN_SEC) {
+  const from = Math.max(0, around - span);
+  const to = around + span;
+  const list = words
+    .filter((x) => x && Number.isFinite(x.s) && Number.isFinite(x.e) && String(x.w ?? '').trim())
+    .filter((x) => x.e > from && x.s < to)
+    .sort((a, b) => a.s - b.s);
+  const lines = [];
+  let cur = null;
+  const close = () => {
+    if (cur) lines.push(`[${minSec(cur.s)}] ${cur.text.join(' ')} (${sec2(cur.s)}-${sec2(cur.e)})`);
+    cur = null;
+  };
+  for (const x of list) {
+    if (cur) {
+      const sentenceEnd = /[.?!]["')\]]*$/.test(String(cur.last.w).trim());
+      if (sentenceEnd || x.s - cur.last.e > PAUSE_SEC || x.s - cur.s >= LINE_MAX_SEC) close();
+    }
+    if (!cur) cur = { s: x.s, e: x.e, text: [], last: x };
+    cur.text.push(String(x.w).trim());
+    cur.e = Math.max(cur.e, x.e);
+    cur.last = x;
+  }
+  close();
+  return { lines, from, to };
 }
