@@ -5,7 +5,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { transcriptChunks, wordsFromJson3 } from './words.mjs';
+import { transcriptMarkdown, wordsFromJson3 } from './words.mjs';
 
 /** @typedef {import('./picks.mjs').Pick} Pick */
 
@@ -225,10 +225,10 @@ export async function fetchInfo({ url, dir, run = realRun }) {
   }
   if (words.length === 0) return { ...head, captions: 'none', chunks: 0 };
 
-  const chunks = transcriptChunks(words, { heat: heatOf(info) });
+  const md = transcriptMarkdown(words, { heat: heatOf(info) });
   writeFileSync(join(dir, 'words.json'), JSON.stringify(words));
-  writeFileSync(join(dir, 'transcript.md'), chunks.join('\n\n') + '\n');
-  return { ...head, captions: track.kind, chunks: chunks.length };
+  writeFileSync(join(dir, 'transcript.md'), md.text);
+  return { ...head, captions: track.kind, chunks: md.chunks };
 }
 
 // ---- sections

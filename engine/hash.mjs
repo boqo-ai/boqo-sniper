@@ -15,6 +15,7 @@ export const SHARED = [
   'tools/brand.mjs',
   'tools/asr.mjs',
   'tools/boqo-upload.mjs',
+  'tools/transcript.mjs',
 ];
 
 export const ENGINE_JSON = 'engine/ENGINE.json';

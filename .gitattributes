@@ -7,4 +7,5 @@ tools/picks-check.mjs -text
 tools/brand.mjs -text
 tools/asr.mjs -text
 tools/boqo-upload.mjs -text
+tools/transcript.mjs -text
 # boqo-engine:end
