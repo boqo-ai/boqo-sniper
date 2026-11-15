@@ -79,8 +79,9 @@ function makeFakes() {
     setTimer: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return t; },
     clearTimer: (t) => { t.live = false; },
   };
+  const fireMs = (ms) => { const t = timers.find((x) => x.live && x.ms === ms); assert.ok(t, `a ${ms} ms timer is pending`); t.live = false; t.fn(); };
   const fire = () => { const t = timers.find((x) => x.live); assert.ok(t, "a timer is pending"); t.live = false; t.fn(); return t.ms; };
-  return { sockets, timers, opts, fire, advance: (ms) => { clock += ms; } };
+  return { sockets, timers, opts, fire, fireMs, advance: (ms) => { clock += ms; } };
 }
 
 test("connectChat: dials the endpoint, sends the handshake in order on open", () => {
@@ -174,4 +175,74 @@ test("connectChat: a constructor that throws is retried with backoff", () => {
   connectChat("c", () => {}, { ...f.opts, WebSocketImpl: Flaky });
   assert.equal(f.fire(), 1000);
   assert.equal(f.sockets.length, 1);
+});
+
+test("connectChat: silence for idleMs after open schedules a reconnect and closes the socket", () => {
+  const f = makeFakes();
+  connectChat("c", () => {}, { ...f.opts, idleMs: 5000 });
+  f.sockets[0].open();
+  f.fireMs(5000); // no frames at all
+  assert.equal(f.sockets[0].closed, true);
+  assert.equal(f.fire(), 1000);
+  assert.equal(f.sockets.length, 2);
+  f.sockets[0].drop(); // the late close event is ignored
+  assert.equal(f.timers.filter((t) => t.live && t.ms === 1000).length, 0);
+});
+
+test("connectChat: a dial that never opens is timed out", () => {
+  const f = makeFakes();
+  connectChat("c", () => {}, { ...f.opts, idleMs: 5000 });
+  f.fireMs(5000);
+  assert.equal(f.fire(), 1000);
+  assert.equal(f.sockets.length, 2);
+});
+
+test("connectChat: a frame re-arms the idle timer", () => {
+  const f = makeFakes();
+  connectChat("c", () => {}, { ...f.opts, idleMs: 5000 });
+  const first = f.timers.find((t) => t.live);
+  f.sockets[0].open();
+  f.sockets[0].recv("PING :tmi.twitch.tv\r\n");
+  assert.equal(first.live, false); // the original deadline is gone
+  assert.equal(f.timers.filter((t) => t.live && t.ms === 5000).length, 1);
+  assert.equal(f.sockets[0].closed, false);
+  assert.equal(f.sockets.length, 1);
+});
+
+test("connectChat: idle timer is cleared by close()", () => {
+  const f = makeFakes();
+  const chat = connectChat("c", () => {}, f.opts);
+  chat.close();
+  assert.equal(f.timers.filter((t) => t.live).length, 0);
+});
+
+test("connectChat: a stray message after the socket was lost never reaches onMsg", () => {
+  const f = makeFakes();
+  const got = [];
+  connectChat("c", (m) => got.push(m), f.opts);
+  f.sockets[0].open();
+  f.sockets[0].drop();
+  f.sockets[0].recv(`${PLAIN}\r\n`);
+  assert.equal(got.length, 0);
+});
+
+test("connectChat: a PONG send that throws does not break the stream", () => {
+  const f = makeFakes();
+  const got = [];
+  connectChat("c", (m) => got.push(m), f.opts);
+  const ws = f.sockets[0];
+  ws.open();
+  ws.send = () => { throw new Error("closing"); };
+  ws.recv(`PING :x\r\n${PLAIN}\r\n`);
+  assert.equal(got.length, 1);
+});
+
+test("connectChat: a message after close() never reaches onMsg", () => {
+  const f = makeFakes();
+  const got = [];
+  const chat = connectChat("c", (m) => got.push(m), f.opts);
+  f.sockets[0].open();
+  chat.close();
+  f.sockets[0].recv(`${PLAIN}\r\n`);
+  assert.equal(got.length, 0);
 });
