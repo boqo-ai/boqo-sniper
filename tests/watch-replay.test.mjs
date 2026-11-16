@@ -73,7 +73,7 @@ function durationOf(file) {
 }
 
 async function onlySession(home, channel) {
-  const root = path.join(home, "boqo-sniper", channel);
+  const root = path.join(home, "boqo-sniper", "watch", channel);
   const names = await fs.readdir(root);
   assert.equal(names.length, 1, `one session folder, got ${names}`);
   return path.join(root, names[0]);
@@ -167,7 +167,7 @@ test("stop.mjs stops a running watcher; a second watcher on the channel is refus
     const args = ["stopme", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")];
     const watching = run(WATCH, args, env);
 
-    const root = path.join(home, "boqo-sniper", "stopme");
+    const root = path.join(home, "boqo-sniper", "watch", "stopme");
     let session = null;
     for (let i = 0; i < 100 && !session; i++) {
       try {
@@ -253,7 +253,7 @@ test("a channel that is offline from the start also ends after 10 offline polls"
 
 /** Wait until the watcher's session folder has its pid file and status; returns the folder. */
 async function waitForSession(home, channel) {
-  const root = path.join(home, "boqo-sniper", channel);
+  const root = path.join(home, "boqo-sniper", "watch", channel);
   for (let i = 0; i < 100; i++) {
     try {
       const names = await fs.readdir(root);

@@ -24,7 +24,7 @@ two chats, as many as the PC carries.
   live in `<home>/brands/` and are shared by every boqo skill. This skill's own files: `<home>/boqo-sniper/config.json`
   (the posting rule and the sensitivity) and `<home>/boqo-sniper/runs.md` (one line per moment).
 - **`<channel>`:** the Twitch login, in lower case (`twitch.tv/<login>`).
-- **`<session>`:** the folder the watcher records into, `<home>/boqo-sniper/<channel>/<YYYYMMDD-HHMMSS>/`. Its
+- **`<session>`:** the folder the watcher records into, `<home>/boqo-sniper/watch/<channel>/<YYYYMMDD-HHMMSS>/`. Its
   name, `<session name>`, is its UTC start. `status.mjs` prints it as `session`.
 - **`<moment>`:** a folder `next.mjs` hands you, inside `<session>/moments/`. Its name, `<moment name>`, is the
   peak's UTC second. It holds `video.mp4` (about 160 s at the stream's quality, about 140 MB, the peak about 125 s
@@ -88,9 +88,9 @@ two chats, as many as the PC carries.
      ```
    - Another agent (macOS, Linux, or Windows in Git Bash or WSL), detached:
      ```sh
-     mkdir -p "<home>/boqo-sniper"
+     mkdir -p "<home>/boqo-sniper/watch"
      nohup node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --sensitivity <n> \
-       > "<home>/boqo-sniper/<channel>.log" 2>&1 &
+       > "<home>/boqo-sniper/watch/<channel>.log" 2>&1 &
      ```
 5. **Check it runs.** `node "$HOME/.boqo-sniper/tools/status.mjs" "<channel>"` about every 10 s, for up to a minute,
    until `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute. Keep its

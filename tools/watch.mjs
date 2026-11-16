@@ -5,7 +5,7 @@
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
 //
 // Runs in the foreground; the agent starts it in the background and reads
-// what it writes: $BOQO_HOME/boqo-sniper/<channel>/<YYYYMMDD-HHMMSS>/
+// what it writes: $BOQO_HOME/boqo-sniper/watch/<channel>/<YYYYMMDD-HHMMSS>/
 //   buf/seg_<UTC stamp>.ts   10 s segments, the newest 720 s
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
 //   status.json  watch.pid   `stop` is written by stop.mjs

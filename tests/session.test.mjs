@@ -26,9 +26,12 @@ test("sniperHome follows BOQO_HOME and falls back to ~/.boqo", async () => {
   });
 });
 
-test("sessionsDir lowercases the channel and refuses path tricks", async () => {
+test("sessionsDir lowercases the channel, lives under watch/, and refuses path tricks", async () => {
   await withHome((home) => {
-    assert.equal(sessionsDir("ShroudTV"), path.join(home, "boqo-sniper", "shroudtv"));
+    assert.equal(sessionsDir("ShroudTV"), path.join(home, "boqo-sniper", "watch", "shroudtv"));
+    // onboarding's samples/ and the clips/ folder sit beside watch/, so no channel name can land on them
+    assert.equal(path.dirname(sessionsDir("clips")), path.join(home, "boqo-sniper", "watch"));
+    assert.equal(path.dirname(sessionsDir("samples")), path.join(home, "boqo-sniper", "watch"));
     for (const bad of ["", "../x", "a/b", "a\\b", "a b"]) {
       assert.throws(() => sessionsDir(bad), /channel/i, bad);
     }

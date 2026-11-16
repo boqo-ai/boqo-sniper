@@ -80,7 +80,7 @@ test("watcherPid: a dead pid and a final status are not a watcher; a live pid wi
 
 test("sweepChannel: dead sessions are cleaned, old moments and empty sessions go, a live one is left alone", async () => {
   await withHome(async (home) => {
-    const root = path.join(home, "boqo-sniper", "sweepy");
+    const root = path.join(home, "boqo-sniper", "watch", "sweepy");
     const recent = stamp(new Date(Date.now() - 3600 * 1000));
     const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)"], { stdio: "ignore" });
     try {
@@ -103,7 +103,7 @@ test("sweepChannel: dead sessions are cleaned, old moments and empty sessions go
 
 test("a new watcher sweeps what a hard-killed one left, and stop.mjs does the same for a dead pid", { timeout: 60000 }, async () => {
   await withHome(async (home) => {
-    const root = path.join(home, "boqo-sniper", "sweepy");
+    const root = path.join(home, "boqo-sniper", "watch", "sweepy");
     const old = await leftover(root, "20200101-000000", { pid: deadPid(), moments: ["20200101-000500"] });
     const env = { ...process.env, BOQO_HOME: home };
     const seg = path.join(home, "seg.ts");
