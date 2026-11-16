@@ -500,7 +500,8 @@ async function main() {
   }
 
   const detector = createDetector({ sensitivity: args.sensitivity });
-  const segs = []; // { n, t0, name, done }
+  const segs = []; // { n, t0, name, done, cap }
+  let captureNo = 0; // which capture a segment came from: a cut never joins two
   const known = new Set();
   let nextN = 0;
   let totalSegments = 0;
@@ -598,7 +599,7 @@ async function main() {
         }
       }
       known.add(name);
-      segs.push({ n: nextN++, t0, name, done: false });
+      segs.push({ n: nextN++, t0, name, done: false, cap: captureNo });
       totalSegments++;
     }
     segs.sort((a, b) => a.t0 - b.t0);
@@ -728,6 +729,8 @@ async function main() {
 
   async function captureLive() {
     const before = totalSegments;
+    // every segment of the last capture was found by the tick after it ended
+    captureNo++;
     capture = startCapture(tool, channel, bufDir);
     let over = false;
     capture.closed.then(() => (over = true));

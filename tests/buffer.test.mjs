@@ -95,14 +95,38 @@ test("planCut: a gap after the peak ends the cut before it", () => {
 });
 
 test("planCut: starts up to GAP_SEC apart are one run, further apart are two", () => {
-  assert.equal(GAP_SEC, 13);
-  const joined = [{ n: 0, t0: 1000 }, { n: 1, t0: 1013 }, { n: 2, t0: 1023 }];
-  assert.equal(planCut(joined, 1025).segments.length, 3);
-  const split = [{ n: 0, t0: 1000 }, { n: 1, t0: 1014 }, { n: 2, t0: 1024 }];
-  assert.deepEqual(planCut(split, 1025).segments.map((x) => x.t0), [1014, 1024]);
-  assert.equal(planCut(split, 1025).peakOffsetSec, 11);
+  assert.equal(GAP_SEC, 25);
+  const joined = [{ n: 0, t0: 1000 }, { n: 1, t0: 1025 }, { n: 2, t0: 1035 }];
+  assert.equal(planCut(joined, 1037).segments.length, 3);
+  const split = [{ n: 0, t0: 1000 }, { n: 1, t0: 1026 }, { n: 2, t0: 1036 }];
+  assert.deepEqual(planCut(split, 1037).segments.map((x) => x.t0), [1026, 1036]);
+  assert.equal(planCut(split, 1037).peakOffsetSec, 11);
   // unsorted input is fine
   assert.deepEqual(planCut([...split].reverse(), 1005).segments.map((x) => x.t0), [1000]);
+});
+
+test("planCut: a live capture's jittery starts are one run, and the cut keeps its post-roll", () => {
+  // seg_ names from a live yt-dlp capture (jynxzi, 2026-11-16): every file is 10.0-10.2 s long, but the
+  // starts land 4 to 14 s apart as the stream arrives in bursts. None of it is a hole.
+  const starts = [5934, 5938, 5944, 5954, 10004, 10016, 10026, 10036, 10048, 10056, 10106, 10120, 10128, 10138, 10148, 10200];
+  const t = (hhmmss) => 1794790000 + Math.floor(hhmmss / 10000) * 3600 + (Math.floor(hhmmss / 100) % 100) * 60 + (hhmmss % 100);
+  const live = starts.map((x, n) => ({ n, t0: t(x), cap: 1 }));
+  const peak = t(10111);
+  const plan = planCut(live, peak);
+  assert.ok(plan.endAt >= peak + 30, `the cut ends ${plan.endAt - peak} s after the peak, not 30`);
+  assert.ok(plan.segments.at(-1).t0 >= t(10138));
+});
+
+test("planCut: a new capture is a new run, however close its first start is", () => {
+  const s = [
+    ...segs(10).map((x) => ({ ...x, cap: 1 })), // 1000 .. 1090
+    ...segs(10, 1100).map((x, i) => ({ ...x, n: 10 + i, cap: 2 })), // 1100 .. 1190, right after
+  ];
+  assert.deepEqual(planCut(s, 1150).segments.map((x) => x.cap), Array(9).fill(2), "nothing from the first capture");
+  assert.equal(planCut(s, 1150).peakOffsetSec, 50);
+  assert.ok(planCut(s, 1050).segments.every((x) => x.cap === 1));
+  // segments with no capture number (a replay) join by time alone
+  assert.equal(planCut(segs(20), 1150).segments.length, 16);
 });
 
 test("chatWindowEnd: the next segment's start, but never more than SEGMENT_SEC + 1 past this one's", () => {
