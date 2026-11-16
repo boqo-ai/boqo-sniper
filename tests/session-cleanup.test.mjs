@@ -283,3 +283,72 @@ test("sweepAll sweeps every channel's dead sessions and leaves a live watcher's 
   });
   await withHome(async () => assert.deepEqual(await sweepAll(), [], "no watch folder yet"));
 });
+
+test("processCommandLine: only a clean 'no such process' is a dead pid; any other failure is unknown", async () => {
+  const posix = (r) => processCommandLine(4242, { platform: "linux", exec: async () => ({ spawnError: false, killed: false, code: 0, stdout: "", stderr: "", ...r }) });
+  assert.equal(await posix({ stdout: "node /x/tools/watch.mjs chan\n" }), "node /x/tools/watch.mjs chan");
+  assert.equal(await posix({ code: 1 }), "", "procps and macOS ps: exit 1, nothing printed, no such pid");
+  assert.equal(await posix({ spawnError: true, code: "ENOENT" }), null, "no ps");
+  assert.equal(await posix({ killed: true, code: null }), null, "ps hit the 15 s timeout");
+  assert.equal(await posix({ code: 1, stderr: "ps: unrecognized option: p\nBusyBox v1.36 multi-call binary." }), null, "busybox ps has no -p");
+  assert.equal(await posix({ code: 2 }), null, "an exit code ps does not use for a missing pid");
+
+  const win = (ps, wmic) => {
+    const calls = [];
+    const exec = async (cmd) => {
+      calls.push(cmd);
+      return { spawnError: false, killed: false, code: 0, stdout: "", stderr: "", ...(cmd === "powershell" ? ps : wmic) };
+    };
+    return processCommandLine(4242, { platform: "win32", exec }).then((v) => ({ v, calls }));
+  };
+  assert.deepEqual(await win({ stdout: '"C:\\node.exe" C:\\x\\watch.mjs chan\r\n' }, {}), { v: '"C:\\node.exe" C:\\x\\watch.mjs chan', calls: ["powershell"] });
+  assert.deepEqual((await win({}, {})).v, "", "PowerShell prints nothing for a pid that is gone");
+  assert.deepEqual(await win({ killed: true, code: null }, { stdout: "\r\nCommandLine=node watch.mjs chan\r\n" }), {
+    v: "node watch.mjs chan",
+    calls: ["powershell", "wmic"],
+  });
+  assert.equal((await win({ code: 1, stderr: "Get-CimInstance : Access denied" }, { stderr: "No Instance(s) Available.\r\n" })).v, "");
+  assert.equal((await win({ spawnError: true, code: "ENOENT" }, { spawnError: true, code: "ENOENT" })).v, null);
+  assert.equal((await win({ spawnError: true, code: "ENOENT" }, { killed: true, code: null })).v, null);
+  assert.equal((await win({ spawnError: true, code: "ENOENT" }, { code: 1, stderr: "wmic is not recognized" })).v, null);
+});
+
+test("watcherPid: a lookup that cannot tell leaves a live watcher alone, so no sweep empties it", async () => {
+  await withHome(async (home) => {
+    const child = await fakeWatcher(path.join(home, "bin"));
+    try {
+      const root = path.join(home, "boqo-sniper", "watch", "busy");
+      const dir = await leftover(root, "20200101-000000", { pid: child.pid });
+      const unknown = async () => null;
+      assert.equal(await watcherPid(dir, { lookup: unknown }), child.pid);
+      await sweepChannel("busy", null, Date.now(), { lookup: unknown });
+      assert.equal((await fs.readdir(path.join(dir, "buf"))).length, 2, "its buffer is untouched");
+      assert.equal(await exists(path.join(dir, "watch.pid")), true);
+    } finally {
+      child.kill();
+    }
+  });
+});
+
+test("the sweep leaves a session younger than 2 minutes, and an ended one its chat may not have read yet", async () => {
+  await withHome(async (home) => {
+    const root = path.join(home, "boqo-sniper", "watch", "racy");
+    const now = Date.parse("2026-11-16T12:00:00Z");
+    const ago = (sec) => new Date(now - sec * 1000);
+    // just created by a watcher starting on another channel: no pid, no status yet
+    const starting = path.join(root, stamp(ago(30)));
+    await fs.mkdir(path.join(starting, "buf"), { recursive: true });
+    await fs.mkdir(path.join(starting, "moments"));
+    // ended with no moments, 3 minutes ago: its chat may still be on its way to read status
+    const justEnded = await leftover(root, stamp(ago(600)), { pid: deadPid(), state: "stopped", updatedAt: ago(180).toISOString() });
+    // ended 11 minutes ago: fair game
+    const longEnded = await leftover(root, stamp(ago(3600)), { pid: deadPid(), state: "offline", updatedAt: ago(660).toISOString() });
+    // a hard-killed one, old enough: swept as before
+    const dead = await leftover(root, stamp(ago(900)), { pid: deadPid(), updatedAt: ago(800).toISOString() });
+    const removed = await sweepChannel("racy", null, now);
+    assert.deepEqual(removed.sort(), [dead, longEnded].sort());
+    assert.equal(await exists(starting), true, "a session younger than 2 minutes is not touched");
+    assert.equal(await exists(justEnded), true, "an ended session under 10 minutes old is not touched");
+    assert.equal(JSON.parse(await fs.readFile(path.join(justEnded, "status.json"), "utf8")).state, "stopped");
+  });
+});

@@ -142,12 +142,14 @@ Repeat until The end.
    `moment.mjs words` in step 3 and every `--find` (`transcript.mjs` refuses an empty words file): set the edges in
    step 5 from the stills and `chatPerSec`; they stay where you put them.
    `"englishOnly": true` is a model that hears every stream as English: when this one is not in English (its chat,
-   the channel, the person), say so once, and offer the multilingual model (about 150 MB). On a yes, then step 2
-   again, which should then give `"englishOnly": false`:
+   the channel, the person), say so once, and offer the multilingual model (about 150 MB). On a yes:
    ```sh
    mkdir -p "<home>/models" && curl -L -o "<home>/models/ggml-base.bin" \
      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
    ```
+   then step 2 again with the stream's language, `--lang <code>` (`--lang ru`) before `--out`: with a language other
+   than English it takes a multilingual model, and gives `"englishOnly": false`. Every later moment of this stream
+   runs with the same `--lang`.
    Known limit: whisper can hear a word that is not there ("Oh") in silence at a multiple of 30 s, its window edge;
    never set an edge on one.
 3. **Read it**, with the moment tool. Never read `chat.json` or `words.json` whole: a busy chat writes hundreds of KB.
