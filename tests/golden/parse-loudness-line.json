@@ -1,0 +1,181 @@
+[
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.0999792  TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.0999792,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.199979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.199979,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.299979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.299979,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.399979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.399979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.499979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.499979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.599979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.599979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.699979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.699979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.799979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.799979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.899979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.899979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 0.999979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.999979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 1.099979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 1.099979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 1.199979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 1.199979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 1.299979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 1.299979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_1 @ 0x702998003980] t: 1.399979   TARGET:-23 LUFS    M: -55.7 S:-120.7     I: -55.7 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 1.399979,
+      "momentary": -55.7
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 5.0       TARGET:-23 LUFS    M: -18.0 S: -25.0     I: -30.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 5,
+      "momentary": -18
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 0.4       TARGET:-23 LUFS    M: -inf S: -inf     I: -inf LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 0.4,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 12.3      TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 12.3,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 7.5       TARGET:-23 LUFS    M: -70.0 S:-70.0     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 7.5,
+      "momentary": -70
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 7.6       TARGET:-23 LUFS    M: -69.9 S:-70.0     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 7.6,
+      "momentary": -69.9
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: 7.7       TARGET:-23 LUFS    M:   3.5 S:-70.0     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": 7.7,
+      "momentary": 3.5
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] t: -0.1      TARGET:-23 LUFS    M: -20.0 S:-70.0     I: -70.0 LUFS       LRA:   0.0 LU",
+    "parsed": {
+      "t": -0.1,
+      "momentary": -20
+    }
+  },
+  {
+    "line": "[Parsed_ebur128_0 @ 0x1] Summary:",
+    "parsed": null
+  },
+  {
+    "line": "  Integrated loudness:",
+    "parsed": null
+  },
+  {
+    "line": "    I:         -32.5 LUFS",
+    "parsed": null
+  },
+  {
+    "line": "[segment @ 0x1] Opening 'seg_20261116054528.ts' for writing",
+    "parsed": null
+  },
+  {
+    "line": "frame=  250 fps= 25 q=-1.0 size=N/A",
+    "parsed": null
+  },
+  {
+    "line": "",
+    "parsed": null
+  },
+  {
+    "line": "M: -20.0 with no t",
+    "parsed": null
+  },
+  {
+    "line": "t: 3.0 with no M",
+    "parsed": null
+  }
+]
