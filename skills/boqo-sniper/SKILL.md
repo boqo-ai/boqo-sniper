@@ -211,7 +211,7 @@ after a batch) does not apply. Its steps run once per session, then once per cli
   the session, and no clip waits for an answer, whatever the rule says, when:
   - there are no boqo tools: the clips land on disk. When the person asks to post, give the one line from
     onboarding.md → 2;
-  - the plan has no publishing: say once, "Autoposting comes with the 7-day trial or Starter from $12";
+  - the plan has no publishing: say once, "Autoposting comes with the 3-day trial or Starter from $12";
   - no account is active: say once that they connect or reconnect one in boqo, under Accounts. When they say it is
     connected, run steps 2 and 4 again.
 - **`ask`,** with posting on: after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you

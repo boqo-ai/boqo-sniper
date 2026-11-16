@@ -9,7 +9,7 @@ out in full, in double quotes (SKILL.md → Overview).
 
 1. **No boqo tools** (no `list_accounts`, onboarding.md → 2): stop here. Posting is not offered unless the person
    asks; then give the one line for this agent from onboarding.md → 2.
-2. **The plan.** `get_account`. Its `planKey` `none` (the plan "Free"): say "Autoposting comes with the 7-day trial
+2. **The plan.** `get_account`. Its `planKey` `none` (the plan "Free"): say "Autoposting comes with the 3-day trial
    or Starter from $12", and stop. Do not call `billing_link`; give a link only when the person asks how to start.
 3. **The rule.**
    - `ask`, or no config file: offer it in one line ("Post any of these? Which, and where?") and wait. A no, or no
@@ -62,7 +62,7 @@ approved. A refusal naming that setting: post again without `caption`.
 ## Refusals
 
 A refusal from boqo is its own sentence: say it as it came, keep the files, stop that clip. A plan refusal stops them
-all, with the plan line, "Autoposting comes with the 7-day trial or Starter from $12": "Accounts and scheduling are
+all, with the plan line, "Autoposting comes with the 3-day trial or Starter from $12": "Accounts and scheduling are
 on paid plans." from `create_upload`, or "Publishing needs a paid plan." from `post_video`.
 
 Whether the clip was posted goes into its line in `runs.md` (SKILL.md → The loop, step 9).

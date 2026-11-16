@@ -34,7 +34,7 @@ The install's doctor names what is missing and how to get it on macOS, Windows a
 ## What runs where
 
 Everything runs on your PC: the capture, chat, transcription, judging (by your own agent's model) and render. Your
-clips stay on your disk. Posting goes through boqo: autoposting comes with the 7-day trial, or with Starter from $12.
+clips stay on your disk. Posting goes through boqo: autoposting comes with the 3-day trial, or with Starter from $12.
 Without boqo you keep the files.
 
 Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai) — that runs on credits.
