@@ -1,5 +1,5 @@
 // Doctor: looks at what this machine has (Node, ffmpeg with libass/ebur128 and
-// working HTTPS, yt-dlp, whisper.cpp and a model, optionally streamlink) and
+// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, optionally streamlink) and
 // says exactly how to install what is missing, per OS. It only looks; it never
 // installs anything.
 import { spawn } from 'node:child_process';
@@ -8,9 +8,10 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { MODEL_URL, findModel } from './asr.mjs';
 import { boqoHome } from './brand.mjs';
+import { toolEnv } from './env.mjs';
 
 /**
- * @typedef {{ name: 'node'|'ffmpeg'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'streamlink',
+ * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'streamlink',
  *             ok: boolean, detail: string, required: boolean }} Check
  */
 
@@ -25,8 +26,8 @@ const CRASH = 'ffmpeg crashed on HTTPS input';
 
 // ---- running things
 
-/** Run a command, never throw. `code` is null when it died on a signal. */
-function run(cmd, args, timeoutMs = QUICK_MS) {
+/** Run a command with `env`, never throw. `code` is null when it died on a signal. */
+function run(env, cmd, args, timeoutMs = QUICK_MS) {
   return new Promise((resolve) => {
     let child;
     let out = '';
@@ -41,7 +42,7 @@ function run(cmd, args, timeoutMs = QUICK_MS) {
     };
     let timer;
     try {
-      child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
     } catch (e) {
       finish({ missing: e.code === 'ENOENT', error: e.message });
       return;
@@ -61,10 +62,10 @@ function run(cmd, args, timeoutMs = QUICK_MS) {
   });
 }
 
-/** Where `cmd` is on PATH, or null. */
-function locate(cmd) {
-  const dirs = (process.env.PATH ?? process.env.Path ?? '').split(delimiter).filter(Boolean);
-  const exts = process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').filter(Boolean)] : [''];
+/** Where `cmd` is on the PATH of `env`, or null. */
+function locate(env, cmd) {
+  const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean);
+  const exts = process.platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').filter(Boolean)] : [''];
   for (const d of dirs) {
     for (const x of exts) {
       const p = join(d, cmd + x);
@@ -104,10 +105,10 @@ function checkNode(nodeMin) {
   return { name: 'node', ok, detail: ok ? `node ${v}` : `node ${v}, need ${nodeMin}+`, required: true };
 }
 
-async function checkFfmpeg() {
-  const path = locate('ffmpeg');
+async function checkFfmpeg(env) {
+  const path = locate(env, 'ffmpeg');
   if (!path) return { name: 'ffmpeg', ok: false, detail: 'not found on PATH', required: true };
-  const r = await run('ffmpeg', ['-hide_banner', '-version']);
+  const r = await run(env, 'ffmpeg', ['-hide_banner', '-version']);
   const m = /ffmpeg version (?:n(?=\d))?(\S+)/i.exec(r.stdout);
   if (r.code !== 0 || !m) {
     return { name: 'ffmpeg', ok: false, detail: `ffmpeg at ${path} did not run (${r.signal ?? `exit ${r.code}`})`, required: true };
@@ -116,9 +117,20 @@ async function checkFfmpeg() {
   return { name: 'ffmpeg', ok: true, detail: `ffmpeg ${ver} at ${path}`, required: true };
 }
 
-async function checkFilters(ffmpegOk) {
+async function checkFfprobe(env) {
+  const path = locate(env, 'ffprobe');
+  if (!path) return { name: 'ffprobe', ok: false, detail: 'not found on PATH', required: true };
+  const r = await run(env, 'ffprobe', ['-hide_banner', '-version']);
+  const m = /ffprobe version (?:n(?=\d))?(\S+)/i.exec(r.stdout);
+  if (r.code !== 0 || !m) {
+    return { name: 'ffprobe', ok: false, detail: `ffprobe at ${path} did not run (${r.signal ?? `exit ${r.code}`})`, required: true };
+  }
+  return { name: 'ffprobe', ok: true, detail: `ffprobe ${m[1].replace(/-static$/, '')} at ${path}`, required: true };
+}
+
+async function checkFilters(env, ffmpegOk) {
   if (!ffmpegOk) return { name: 'ffmpeg-filters', ok: false, detail: 'needs ffmpeg', required: true };
-  const r = await run('ffmpeg', ['-hide_banner', '-filters']);
+  const r = await run(env, 'ffmpeg', ['-hide_banner', '-filters']);
   const has = (f) => new RegExp(`^\\s*\\S+\\s+${f}\\s`, 'm').test(r.stdout);
   const missing = ['ass', 'ebur128'].filter((f) => !has(f));
   return {
@@ -129,10 +141,10 @@ async function checkFilters(ffmpegOk) {
   };
 }
 
-async function checkHttps(ffmpegOk) {
+async function checkHttps(env, ffmpegOk) {
   const name = 'ffmpeg-https';
   if (!ffmpegOk) return { name, ok: false, detail: 'needs ffmpeg', required: false };
-  const r = await run('ffmpeg', ['-v', 'error', '-i', PROBE_URL, '-f', 'null', '-'], HTTPS_MS);
+  const r = await run(env, 'ffmpeg', ['-v', 'error', '-i', PROBE_URL, '-f', 'null', '-'], HTTPS_MS);
   if (r.code === 0) return { name, ok: true, detail: 'ffmpeg read an HTTPS file', required: false };
   if (r.timedOut) return { name, ok: false, detail: NO_NETWORK, required: false };
   if (CRASH_SIGNALS.has(r.signal) || CRASH_CODES.has(r.code)) {
@@ -144,20 +156,20 @@ async function checkHttps(ffmpegOk) {
   return { name, ok: false, detail: NO_NETWORK, required: false };
 }
 
-async function checkYtDlp() {
-  const path = locate('yt-dlp');
+async function checkYtDlp(env) {
+  const path = locate(env, 'yt-dlp');
   if (!path) return { name: 'yt-dlp', ok: false, detail: 'not found on PATH', required: true };
-  const r = await run('yt-dlp', ['--version']);
+  const r = await run(env, 'yt-dlp', ['--version']);
   const v = r.stdout.trim().split('\n')[0];
   if (r.code !== 0 || !v) return { name: 'yt-dlp', ok: false, detail: `yt-dlp at ${path} did not run (${r.signal ?? `exit ${r.code}`})`, required: true };
   if (!ytDlpAtLeast(v)) return { name: 'yt-dlp', ok: false, detail: `yt-dlp ${v} is older than ${MIN_YTDLP}`, required: true };
   return { name: 'yt-dlp', ok: true, detail: `yt-dlp ${v} at ${path}`, required: true };
 }
 
-async function checkWhisper(required) {
-  const path = locate('whisper-cli');
+async function checkWhisper(env, required) {
+  const path = locate(env, 'whisper-cli');
   if (!path) return { name: 'whisper', ok: false, detail: 'whisper-cli not found on PATH', required };
-  const r = await run('whisper-cli', ['-h']);
+  const r = await run(env, 'whisper-cli', ['-h']);
   if (r.missing || r.error) return { name: 'whisper', ok: false, detail: `whisper-cli at ${path} could not start`, required };
   return { name: 'whisper', ok: true, detail: `whisper-cli at ${path}`, required };
 }
@@ -169,31 +181,33 @@ function checkModel(required) {
     : { name: 'whisper-model', ok: false, detail: 'no ggml model found', required };
 }
 
-async function checkStreamlink() {
-  const path = locate('streamlink');
+async function checkStreamlink(env) {
+  const path = locate(env, 'streamlink');
   if (!path) return { name: 'streamlink', ok: false, detail: 'not found on PATH', required: false };
-  const r = await run('streamlink', ['--version']);
+  const r = await run(env, 'streamlink', ['--version']);
   const v = r.stdout.trim().split('\n')[0];
   if (r.code !== 0) return { name: 'streamlink', ok: false, detail: `streamlink at ${path} did not run`, required: false };
   return { name: 'streamlink', ok: true, detail: `${v || 'streamlink'} at ${path}`, required: false };
 }
 
 /**
- * Look at the machine. Never installs anything.
- * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean }} o
+ * Look at the machine. Never installs anything. The tools are looked for and
+ * run with `o.env` (default `toolEnv()`, which finds macOS ffmpeg-full).
+ * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv }} o
  * @returns {Promise<Check[]>}
  */
 export async function runChecks(o) {
+  const env = o.env ?? toolEnv();
   const wr = o.whisper === 'required';
-  const ffmpeg = await checkFfmpeg();
+  const [ffmpeg, ffprobe] = await Promise.all([checkFfmpeg(env), checkFfprobe(env)]);
   const [filters, https, ytdlp, whisper, streamlink] = await Promise.all([
-    checkFilters(ffmpeg.ok),
-    checkHttps(ffmpeg.ok),
-    checkYtDlp(),
-    checkWhisper(wr),
-    o.streamlink ? checkStreamlink() : null,
+    checkFilters(env, ffmpeg.ok),
+    checkHttps(env, ffmpeg.ok),
+    checkYtDlp(env),
+    checkWhisper(env, wr),
+    o.streamlink ? checkStreamlink(env) : null,
   ]);
-  return [checkNode(o.nodeMin), ffmpeg, filters, https, ytdlp, whisper, checkModel(wr), ...(streamlink ? [streamlink] : [])];
+  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), ...(streamlink ? [streamlink] : [])];
 }
 
 /** True when every required check passed. */
@@ -202,21 +216,24 @@ export const isOk = (checks) => checks.every((c) => c.ok || !c.required);
 // ---- hints
 
 const BTBN = 'https://github.com/BtbN/FFmpeg-Builds/releases';
-const PATH_LINE = 'export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"';
+// The release binary carries yt-dlp-ejs; a bare `pip install` lacks it and hits PEP 668.
+const YTDLP_BINARY =
+  'mkdir -p ~/.local/bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp && chmod +x ~/.local/bin/yt-dlp';
+const RESTART = 'After installing, restart the agent so it sees the new PATH.';
 
 function modelDir() {
   return process.env.BOQO_HOME ? join(boqoHome(), 'models') : '~/.boqo/models/';
 }
 
 const FFMPEG = {
-  darwin: 'brew install ffmpeg-full (plain `brew install ffmpeg` has no libass)',
-  win32: 'winget install Gyan.FFmpeg, then open a new terminal',
-  linux: `a full ffmpeg: your distro package (\`sudo apt install ffmpeg\`, \`sudo dnf install ffmpeg\`) or the BtbN build ${BTBN}`,
+  darwin: '`brew install ffmpeg-full` (the engine finds it by itself; plain `brew install ffmpeg` has no libass)',
+  win32: '`winget install Gyan.FFmpeg`',
+  linux: `install a full ffmpeg: your distro package (\`sudo apt install ffmpeg\`, \`sudo dnf install ffmpeg\`) or the BtbN build ${BTBN}`,
 };
 
 /**
- * One short line per failed check for this platform, plus the PATH line for
- * macOS ffmpeg-full.
+ * One short line per failed check for this platform; on Windows, after an
+ * install line, one line to restart the agent so it sees the new PATH.
  * @param {Check[]} failed
  * @param {'darwin'|'win32'|'linux'} platform
  * @returns {string[]}
@@ -226,11 +243,12 @@ export function hintsFor(failed, platform) {
   const bad = failed.filter((c) => !c.ok);
   const noFfmpeg = bad.some((c) => c.name === 'ffmpeg');
   const lines = [];
-  let needsPath = false;
+  let installs = false;
 
   for (const c of bad) {
     switch (c.name) {
       case 'node': {
+        installs = true;
         const need = /need (\d+)/.exec(c.detail)?.[1] ?? '20';
         lines.push(
           `node: Node ${need}+ is needed: ${p === 'darwin' ? '`brew install node`' : p === 'win32' ? '`winget install OpenJS.NodeJS.LTS`' : 'nvm or your distro'}, or https://nodejs.org`,
@@ -238,13 +256,18 @@ export function hintsFor(failed, platform) {
         break;
       }
       case 'ffmpeg':
-        lines.push(`ffmpeg: install ${FFMPEG[p]}`);
-        if (p === 'darwin') needsPath = true;
+        lines.push(`ffmpeg: ${FFMPEG[p]}`);
+        installs = true;
+        break;
+      case 'ffprobe':
+        if (noFfmpeg) break;
+        lines.push(`ffprobe: ${FFMPEG[p]}`);
+        installs = true;
         break;
       case 'ffmpeg-filters':
         if (noFfmpeg) break;
-        lines.push(`ffmpeg-filters: this ffmpeg lacks libass or ebur128 (${c.detail}); install ${FFMPEG[p]}`);
-        if (p === 'darwin') needsPath = true;
+        lines.push(`ffmpeg-filters: this ffmpeg lacks libass or ebur128 (${c.detail}); ${FFMPEG[p]}`);
+        installs = true;
         break;
       case 'ffmpeg-https':
         if (noFfmpeg) break;
@@ -254,21 +277,23 @@ export function hintsFor(failed, platform) {
           );
         } else {
           const what = c.detail.includes(NO_HTTPS_BUILD) ? 'was built without HTTPS support' : 'crashes on HTTPS input (exit 139 / -11, typical of static builds)';
-          lines.push(`ffmpeg-https: this ffmpeg ${what}; install ${FFMPEG[p]}`);
-          if (p === 'darwin') needsPath = true;
+          lines.push(`ffmpeg-https: this ffmpeg ${what}; ${FFMPEG[p]}`);
+          installs = true;
         }
         break;
       case 'yt-dlp': {
+        installs = true;
         const old = /older than/.test(c.detail);
         if (p === 'darwin') lines.push(`yt-dlp: ${old ? '`brew upgrade yt-dlp`' : '`brew install yt-dlp`'} (needs ${MIN_YTDLP}+)`);
         else if (p === 'win32') lines.push(`yt-dlp: ${old ? '`winget upgrade yt-dlp.yt-dlp`' : '`winget install yt-dlp.yt-dlp`'} (needs ${MIN_YTDLP}+)`);
         else
           lines.push(
-            `yt-dlp: ${old ? '`yt-dlp -U` or ' : ''}\`python3 -m pip install -U yt-dlp\`, or the binary from https://github.com/yt-dlp/yt-dlp/releases/latest (needs ${MIN_YTDLP}+; distro packages are often older)`,
+            `yt-dlp: ${old ? '`yt-dlp -U`, or ' : ''}the release binary, \`${YTDLP_BINARY}\`, or \`pipx install "yt-dlp[default]"\` (needs ${MIN_YTDLP}+; distro packages are often older)`,
           );
         break;
       }
       case 'whisper':
+        installs = true;
         if (p === 'darwin') lines.push('whisper: `brew install whisper-cpp`');
         else if (p === 'win32')
           lines.push('whisper: unzip a release from https://github.com/ggml-org/whisper.cpp/releases and put whisper-cli.exe on PATH');
@@ -278,12 +303,13 @@ export function hintsFor(failed, platform) {
         lines.push(`whisper-model: download ${MODEL_URL} into ${modelDir()}`);
         break;
       case 'streamlink':
+        installs = true;
         if (p === 'darwin') lines.push('streamlink: `brew install streamlink`');
         else if (p === 'win32') lines.push('streamlink: `winget install Streamlink.Streamlink`');
         else lines.push('streamlink: `pipx install streamlink` or your distro package');
         break;
     }
   }
-  if (needsPath) lines.push(`ffmpeg-full is keg-only: put it first on PATH with \`${PATH_LINE}\``);
+  if (installs && p === 'win32') lines.push(RESTART);
   return lines;
 }

@@ -6,6 +6,8 @@
 //   lives in its own file, starting `offset` seconds in.
 // Renders every pick to <dir>/clip-NN.mp4 and prints one JSON line,
 // {"clips":[{"file","s","e","title"}]} (exit 0), or {"error":"..."} (exit 1).
+// A clip that fails stops the batch with {"error":"clip N: ...","rendered":[...]},
+// the clips rendered before it (already in <dir>).
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadBrand } from '../engine/brand.mjs';
@@ -83,18 +85,24 @@ async function main(argv) {
   const clips = [];
   for (const [i, p] of picks.entries()) {
     const sec = files?.get(i);
-    const { out } = await renderClip({
-      src: sec ? resolve(sec.file) : resolve(opt.src),
-      seek: sec?.offset,
-      s: p.s,
-      e: p.e,
-      words,
-      brand,
-      layout: opt.layout,
-      hook: p.hook ?? p.title,
-      outDir,
-      name: `clip-${String(i + 1).padStart(2, '0')}`,
-    });
+    let out;
+    try {
+      ({ out } = await renderClip({
+        src: sec ? resolve(sec.file) : resolve(opt.src),
+        seek: sec?.offset,
+        s: p.s,
+        e: p.e,
+        words,
+        brand,
+        layout: opt.layout,
+        hook: p.hook ?? p.title,
+        outDir,
+        name: `clip-${String(i + 1).padStart(2, '0')}`,
+      }));
+    } catch (err) {
+      process.stdout.write(JSON.stringify({ error: `clip ${i + 1}: ${err.message}`, rendered: clips }) + '\n');
+      process.exit(1);
+    }
     clips.push({ file: out, s: p.s, e: p.e, title: p.title ?? null });
   }
   process.stdout.write(JSON.stringify({ clips }) + '\n');

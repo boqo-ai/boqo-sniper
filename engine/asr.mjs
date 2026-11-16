@@ -7,6 +7,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { availableParallelism, homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { boqoHome } from './brand.mjs';
+import { toolEnv } from './env.mjs';
 import { wordsFromWhisper } from './words.mjs';
 
 /** @typedef {import('./words.mjs').Word} Word */
@@ -54,8 +55,26 @@ export function findModel(home = homedir()) {
  * @returns {string[]}
  */
 export function whisperArgs(wav, model, base, lang = 'auto') {
-  const l = /\.en\.bin$/i.test(model) ? 'en' : lang;
+  const l = isEnglishOnly(model) ? 'en' : lang;
   return ['-m', model, '-f', wav, '-ml', '1', '-sow', '-oj', '-of', base, '-np', '-l', l];
+}
+
+const isEnglishOnly = (model) => /\.en\.bin$/i.test(String(model));
+
+/**
+ * The language a transcription ran in. An English-only model (`*.en.bin`)
+ * is always English, whatever the audio: `englishOnly` says so. A
+ * multilingual one reports what whisper heard (`result.language` in its
+ * JSON), else the language asked for.
+ * @param {string} model
+ * @param {string} [asked] the `--lang` given, default auto
+ * @param {object|null} [json] whisper's `-oj` output
+ * @returns {{ lang: string, englishOnly: boolean }}
+ */
+export function whisperLang(model, asked = 'auto', json = null) {
+  if (isEnglishOnly(model)) return { lang: 'en', englishOnly: true };
+  const heard = json?.result?.language;
+  return { lang: typeof heard === 'string' && heard ? heard : asked, englishOnly: false };
 }
 
 const INSTALL_WHISPER =
@@ -73,7 +92,7 @@ function run(cmd, args, missing) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+      child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, env: toolEnv() });
     } catch (err) {
       reject(new Error(`${cmd} could not start: ${err.message}`));
       return;
@@ -93,7 +112,7 @@ function run(cmd, args, missing) {
 // whisper-cli exists and starts; checked before any audio work
 function probeWhisper() {
   return new Promise((resolve, reject) => {
-    const child = spawn('whisper-cli', ['-h'], { stdio: 'ignore', windowsHide: true });
+    const child = spawn('whisper-cli', ['-h'], { stdio: 'ignore', windowsHide: true, env: toolEnv() });
     child.on('error', (err) => reject(err.code === 'ENOENT' ? new Error(INSTALL_WHISPER) : new Error(`whisper-cli could not start: ${err.message}`)));
     child.on('close', () => resolve());
   });
@@ -107,6 +126,17 @@ function probeWhisper() {
  * @returns {Promise<Word[]>}
  */
 export async function transcribe(file, o = {}) {
+  return (await transcribeDetailed(file, o)).words;
+}
+
+/**
+ * `transcribe`, plus the model file used and the language it ran in
+ * (`whisperLang`).
+ * @param {string} file
+ * @param {{ s?: number, e?: number, lang?: string }} [o]
+ * @returns {Promise<{ words: Word[], model: string, lang: string, englishOnly: boolean }>}
+ */
+export async function transcribeDetailed(file, o = {}) {
   const { s, e, lang = 'auto' } = o;
   const hasS = s !== undefined && s !== null;
   const hasE = e !== undefined && e !== null;
@@ -132,7 +162,8 @@ export async function transcribe(file, o = {}) {
     const base = join(dir, 'out');
     const threads = Math.min(8, availableParallelism());
     await run('whisper-cli', [...whisperArgs(wav, model, base, lang), '-t', String(threads)], INSTALL_WHISPER);
-    return wordsFromWhisper(JSON.parse(await readFile(`${base}.json`, 'utf8')), start);
+    const json = JSON.parse(await readFile(`${base}.json`, 'utf8'));
+    return { words: wordsFromWhisper(json, start), model, ...whisperLang(model, lang, json) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

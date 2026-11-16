@@ -32,13 +32,25 @@ function speakerStripped(text, atStart) {
   return t === '-' || MARK_ONLY.test(t) ? '' : t;
 }
 
+const GUESS_WORD_MS = 400;
+
+const segText = (seg) => (typeof seg?.utf8 === 'string' ? seg.utf8.replace(/\s+/g, ' ').trim() : '');
+
 /**
  * Words from a YouTube json3 caption track. Sound tags (`[Music]`,
  * `[Applause]`) are dropped as in `wordsFromWhisper`, and so are speaker
- * marks (`>>`, a speaker dash); a dropped mark gives its time to no one. Each seg starts at
- * `tStartMs + tOffsetMs`. A word ends where the next one starts, and never
- * runs longer than one second; the last word ends at its event's end, also
- * capped.
+ * marks (`>>`, a speaker dash); a dropped mark gives its time to no one. Each
+ * seg starts at `tStartMs + tOffsetMs`; newlines in a seg are spaces.
+ *
+ * A seg with no `tOffsetMs` that holds several words (a manual track has one
+ * seg per line) is split into its words, spread over the seg's span (its start
+ * to the next seg's start in that event, or the event end; 0.4 s a word when
+ * neither is known) by their share of its characters, a word's space counted.
+ * A speaker mark there is dropped per word and gets no share; a sound tag keeps
+ * its share and is then dropped. A spread word never ends past its seg's span.
+ *
+ * A word ends where the next one starts, and never runs longer than one
+ * second; the last word ends at its event's end, also capped.
  * @param {object} j parsed json3
  * @returns {Word[]}
  */
@@ -49,14 +61,33 @@ export function wordsFromJson3(j) {
     const t0 = num(ev?.tStartMs);
     if (t0 === null || !Array.isArray(ev.segs)) continue;
     const d = num(ev.dDurationMs);
+    const endMs = d === null ? null : t0 + d;
+    const segStart = (seg) => t0 + (num(seg?.tOffsetMs) ?? 0);
     let atStart = true;
-    for (const seg of ev.segs) {
-      const text = speakerStripped(typeof seg?.utf8 === 'string' ? seg.utf8.trim() : '', atStart);
-      if (!text) continue;
+    ev.segs.forEach((seg, k) => {
+      const text = speakerStripped(segText(seg), atStart);
+      if (!text) return;
       atStart = false;
-      const startMs = t0 + (num(seg.tOffsetMs) ?? 0);
-      raw.push({ w: text, startMs, endMs: d === null ? null : t0 + d });
-    }
+      const startMs = segStart(seg);
+      const parts = text
+        .split(' ')
+        .map((w) => speakerStripped(w, false))
+        .filter(Boolean);
+      if (num(seg.tOffsetMs) !== null || parts.length < 2) {
+        raw.push({ w: text, startMs, endMs });
+        return;
+      }
+      const next = ev.segs.slice(k + 1).find((x) => segText(x) && segStart(x) > startMs);
+      let spanEnd = next ? segStart(next) : endMs;
+      if (spanEnd === null || spanEnd <= startMs) spanEnd = startMs + GUESS_WORD_MS * parts.length;
+      const weights = parts.map((w) => [...w].length + 1);
+      const total = weights.reduce((a, b) => a + b, 0);
+      let before = 0;
+      parts.forEach((w, i) => {
+        raw.push({ w, startMs: startMs + ((spanEnd - startMs) * before) / total, endMs: endMs ?? spanEnd, spanEndMs: spanEnd });
+        before += weights[i];
+      });
+    });
   }
   raw.sort((a, b) => a.startMs - b.startMs);
   const spoken = dropNonSpeech(raw, (r) => r.w);
@@ -65,7 +96,7 @@ export function wordsFromJson3(j) {
     const cap = s + MAX_WORD_SEC;
     const next = spoken[i + 1];
     let e = next ? next.startMs / 1000 : r.endMs === null ? cap : r.endMs / 1000;
-    e = Math.min(e, cap);
+    e = Math.min(e, cap, r.spanEndMs === undefined ? Infinity : r.spanEndMs / 1000);
     if (e <= s) e = s + MIN_WORD_SEC;
     return { w: r.w, s: round3(s), e: round3(e) };
   });
@@ -169,11 +200,16 @@ function spreadStacked(words) {
   return words;
 }
 
+// The longest a whisper word may last, by its characters: whisper stretches
+// a word's start back into the silence before it (captions came ~8 s early).
+const longestWordSec = (text) => Math.min(1.2, 0.25 + 0.09 * [...text].length);
+
 /**
  * Words from whisper.cpp `-oj` JSON (`offsets` are milliseconds). Non-speech
  * items (`[BLANK_AUDIO]`, `(music)`, `♪`) and sound tags split across items
- * (`(upbeat` + `music)`) are dropped; words stacked on one timestamp are
- * spread out.
+ * (`(upbeat` + `music)`) are dropped. A word's start is pulled to at most
+ * min(1.2, 0.25 + 0.09 x its characters) seconds before its end. Words stacked
+ * on one timestamp are spread out.
  * @param {object} j parsed whisper JSON
  * @param {number} [offsetSec] added to every time, for a cut that starts later
  * @returns {Word[]}
@@ -189,8 +225,9 @@ export function wordsFromWhisper(j, offsetSec = 0) {
     kept.push({ text, from, to });
   }
   const out = dropNonSpeech(kept, (x) => x.text).map(({ text, from, to }) => {
-    const s = round3(offsetSec + from / 1000);
-    let e = round3(offsetSec + to / 1000);
+    const end = offsetSec + to / 1000;
+    const s = round3(Math.max(offsetSec + from / 1000, end - longestWordSec(text)));
+    let e = round3(end);
     if (e <= s) e = round3(s + MIN_WORD_SEC);
     return { w: text, s, e };
   });

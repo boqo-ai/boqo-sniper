@@ -2,11 +2,13 @@
 // node tools/asr.mjs <file> [--from s --to e] [--lang xx] --out <words.json>
 //   Local speech to words with whisper.cpp. With --from/--to only that range
 //   is transcribed; times stay on the source timeline.
-//   Prints {"words":N,"out":"<path>","model":"<file name>","seconds":<wall time>}.
+//   Prints {"words":N,"out":"<path>","model":"<file name>","seconds":<wall time>,
+//   "lang":"<language it ran in>","englishOnly":bool}. englishOnly is true for an
+//   `.en` model, which hears every video as English.
 // Exit 1 with {"error":"..."} on failure (whisper-cli or a model missing too).
 import { writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
-import { findModel, transcribe } from '../engine/asr.mjs';
+import { transcribeDetailed } from '../engine/asr.mjs';
 
 const fail = (msg) => {
   process.stdout.write(JSON.stringify({ error: msg }) + '\n');
@@ -38,15 +40,17 @@ async function main(argv) {
   const e = num(opt.to, '--to');
 
   const t0 = Date.now();
-  const words = await transcribe(resolve(positional[0]), { s, e, lang: opt.lang });
+  const r = await transcribeDetailed(resolve(positional[0]), { s, e, lang: opt.lang });
   const out = resolve(opt.out);
-  writeFileSync(out, JSON.stringify(words));
+  writeFileSync(out, JSON.stringify(r.words));
   process.stdout.write(
     JSON.stringify({
-      words: words.length,
+      words: r.words.length,
       out,
-      model: basename(findModel() ?? ''),
+      model: basename(r.model),
       seconds: Math.round((Date.now() - t0) / 100) / 10,
+      lang: r.lang,
+      englishOnly: r.englishOnly,
     }) + '\n',
   );
 }

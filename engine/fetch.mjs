@@ -5,6 +5,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { toolEnv } from './env.mjs';
 import { transcriptMarkdown, wordsFromJson3 } from './words.mjs';
 
 /** @typedef {import('./picks.mjs').Pick} Pick */
@@ -77,9 +78,12 @@ const baseLang = (l) => String(l).split(/[-_]/)[0].toLowerCase();
 
 /**
  * The one caption track to request, or null when the video has none.
- * Order: a manual track in the video's language (exact code first, then the
- * bare language, then a regional one), the automatic `<base>-orig` track, any
- * manual track, `en-orig`, any other `-orig` track.
+ * An automatic `<lang>-orig` track is the speech as spoken, with a time for
+ * every word; a manual (owner-uploaded) track has one time per line. Order,
+ * for a known language: `<base>-orig`, a manual track in that language (exact
+ * code first, then the bare language, then a regional one), any manual track,
+ * `en-orig`, any other `-orig`. For an unknown language: `en-orig`, any other
+ * `-orig`, any manual track.
  * @param {object} info yt-dlp -J output
  * @returns {{ kind: 'manual'|'auto', lang: string } | null}
  */
@@ -87,18 +91,21 @@ export function captionTrackOf(info) {
   const manual = trackKeys(info?.subtitles);
   const auto = trackKeys(info?.automatic_captions);
   const lang = typeof info?.language === 'string' && info.language ? info.language : null;
+  const anyOrig = () => (auto.includes('en-orig') ? 'en-orig' : auto.find((k) => k.endsWith('-orig')));
 
   if (lang) {
     const base = baseLang(lang);
+    if (auto.includes(`${base}-orig`)) return { kind: 'auto', lang: `${base}-orig` };
     const same = manual.filter((k) => baseLang(k) === base);
     const pick = same.find((k) => k === lang) ?? same.find((k) => k === base) ?? same[0];
     if (pick) return { kind: 'manual', lang: pick };
-    if (auto.includes(`${base}-orig`)) return { kind: 'auto', lang: `${base}-orig` };
+  } else {
+    const orig = anyOrig();
+    if (orig) return { kind: 'auto', lang: orig };
   }
   if (manual.length) return { kind: 'manual', lang: manual[0] };
-  if (auto.includes('en-orig')) return { kind: 'auto', lang: 'en-orig' };
-  const anyOrig = auto.find((k) => k.endsWith('-orig'));
-  return anyOrig ? { kind: 'auto', lang: anyOrig } : null;
+  const orig = anyOrig();
+  return orig ? { kind: 'auto', lang: orig } : null;
 }
 
 /**
@@ -163,7 +170,7 @@ export function planFallback(url, picks, dir, duration) {
 
 const exec = (file, args, opts = {}) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { maxBuffer: MAX_BUFFER, ...opts }, (err, stdout, stderr) => {
+    execFile(file, args, { maxBuffer: MAX_BUFFER, env: toolEnv(), ...opts }, (err, stdout, stderr) => {
       if (err) {
         const tail = String(stderr || err.message).trim().split('\n').filter(Boolean).slice(-2).join(' ');
         reject(new Error(err.code === 'ENOENT' ? `${file} is not installed or not on PATH` : `${file} failed: ${tail}`));

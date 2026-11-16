@@ -1,7 +1,7 @@
 {
   "from": "boqo-ai/boqo-clips",
-  "commit": "709e135601958d013569e25a069c5f70016299bc",
-  "hash": "1e39724676eb6f39696b8dae3940995e3903667cb5e10f31a4cc76f1892857da",
+  "commit": "f10b848102bcb567d9dcf581ef29987950929083",
+  "hash": "13c2adfa5dad438b8782f15e4d00e126e3dae976ac2956a87407c8136ac380fa",
   "files": [
     "engine/",
     "tools/doctor.mjs",
