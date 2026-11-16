@@ -5,15 +5,18 @@
 //
 // Writes `stop` into the session folder (the watcher reads it every second)
 // and, off Windows, sends SIGTERM to the pid. Waits for the process to go, so
-// nothing is still recording when this returns. One JSON line:
+// nothing is still recording when this returns: up to 55 s (the watcher's live
+// check alone can take 45 s), then a hard kill. A pid whose process is not a
+// watcher (its command line names no watch.mjs) is never signalled. One JSON line:
 //   {"stopped": true, "channel", "pid"}     it was running and is gone now
 //   {"stopped": false, "reason": "..."}     nothing was running
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { cleanupSession, currentSession, pidAlive, watcherPid } from "../lib/session.mjs";
+import { STOP_WAIT_MS, cleanupSession, currentSession, isWatcherCommand, pidAlive, processCommandLine, watcherPid } from "../lib/session.mjs";
 
-const WAIT_MS = 20000;
+// BOQO_SNIPER_STOP_WAIT_MS shortens the wait, for tests.
+const WAIT_MS = Number(process.env.BOQO_SNIPER_STOP_WAIT_MS) > 0 ? Number(process.env.BOQO_SNIPER_STOP_WAIT_MS) : STOP_WAIT_MS;
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
@@ -55,10 +58,14 @@ async function main() {
     } catch {}
   }
   if (!(await gone(pid, WAIT_MS))) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {}
-    await gone(pid, 5000);
+    // Still the watcher? A pid can change hands while we wait.
+    const cmd = await processCommandLine(pid);
+    if (cmd === null || isWatcherCommand(cmd)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+      await gone(pid, 5000);
+    }
     // It never got to clean up after itself.
     await cleanupSession(session);
   }

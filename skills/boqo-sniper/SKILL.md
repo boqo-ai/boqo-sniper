@@ -118,9 +118,9 @@ Repeat until The end.
    node "$HOME/.boqo-sniper/tools/next.mjs" "<channel>"
    ```
    - `{"moment": "<moment>", "meta": {…}}`: go on with step 2.
-   - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 3 minutes
-     old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up), tell the person, offer to start
-     again (Starting, step 3), and go to The end.
+   - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 4 minutes
+     old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up, and never signals a process that
+     is not the watcher), tell the person, offer to start again (Starting, step 3), and go to The end.
    - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end.
 2. **Transcribe.**
    ```sh
@@ -211,9 +211,9 @@ after a batch) does not apply. Its steps run once per session, then once per cli
 ```sh
 node "$HOME/.boqo-sniper/tools/stop.mjs" "<channel>"
 ```
-`{"stopped": true, …}` returns once the watcher is gone; `{"stopped": false, …}` means nothing was running. Then the
-report. Moments the watcher had cut and you had not judged yet stay where they are (the next watch of the channel
-deletes them after a day); the report says how many. When the person says to finish them, run `next.mjs` and the
+`{"stopped": true, …}` returns once the watcher is gone (it can take up to a minute); `{"stopped": false, …}` means
+nothing was running. Then the report. Moments the watcher had cut and you had not judged yet stay where they are
+(the next watch of the channel deletes them after a day); the report says how many. When the person says to finish them, run `next.mjs` and the
 loop on each, until it says `stopped`.
 
 **`{"stopped": …}`.** The watch is over:
