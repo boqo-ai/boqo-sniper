@@ -39,15 +39,19 @@ const segText = (seg) => (typeof seg?.utf8 === 'string' ? seg.utf8.replace(/\s+/
 /**
  * Words from a YouTube json3 caption track. Sound tags (`[Music]`,
  * `[Applause]`) are dropped as in `wordsFromWhisper`, and so are speaker
- * marks (`>>`, a speaker dash); a dropped mark gives its time to no one. Each
- * seg starts at `tStartMs + tOffsetMs`; newlines in a seg are spaces.
+ * marks (`>>`, a speaker dash), at a seg's start and per word; a dropped mark
+ * gives its time to no one. Each seg starts at `tStartMs + tOffsetMs`;
+ * newlines in a seg are spaces.
  *
- * A seg with no `tOffsetMs` that holds several words (a manual track has one
- * seg per line) is split into its words, spread over the seg's span (its start
- * to the next seg's start in that event, or the event end; 0.4 s a word when
- * neither is known) by their share of its characters, a word's space counted.
- * A speaker mark there is dropped per word and gets no share; a sound tag keeps
- * its share and is then dropped. A spread word never ends past its seg's span.
+ * Consecutive segs of an event that start at the same time are one piece of
+ * text, joined as YouTube shows them (a manual line split into styled segs).
+ * A single seg with a `tOffsetMs` (an automatic track's word) stays one word.
+ * Any other piece with several words is split, and its words are spread over
+ * its span by their share of its characters, a word's space counted: from its
+ * start to the next piece of its event, else the event end, and never past the
+ * start of the next event that holds text (0.4 s a word when no end is known).
+ * A sound tag keeps its share and is then dropped. A spread word never ends
+ * past its span.
  *
  * A word ends where the next one starts, and never runs longer than one
  * second; the last word ends at its event's end, also capped.
@@ -56,29 +60,59 @@ const segText = (seg) => (typeof seg?.utf8 === 'string' ? seg.utf8.replace(/\s+/
  */
 export function wordsFromJson3(j) {
   const events = Array.isArray(j?.events) ? j.events : [];
+  const starts = events
+    .filter((ev) => num(ev?.tStartMs) !== null && Array.isArray(ev.segs) && ev.segs.some((x) => segText(x)))
+    .map((ev) => ev.tStartMs)
+    .sort((a, b) => a - b);
+  // the first event start after `ms`, or null
+  const nextEventStart = (ms) => {
+    let lo = 0;
+    let hi = starts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] > ms) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo < starts.length ? starts[lo] : null;
+  };
+
   const raw = [];
   for (const ev of events) {
     const t0 = num(ev?.tStartMs);
     if (t0 === null || !Array.isArray(ev.segs)) continue;
     const d = num(ev.dDurationMs);
     const endMs = d === null ? null : t0 + d;
-    const segStart = (seg) => t0 + (num(seg?.tOffsetMs) ?? 0);
+
+    const pieces = [];
+    for (const seg of ev.segs) {
+      const startMs = t0 + (num(seg?.tOffsetMs) ?? 0);
+      const utf8 = typeof seg?.utf8 === 'string' ? seg.utf8 : '';
+      const last = pieces.at(-1);
+      if (last && last.startMs === startMs) {
+        last.utf8 += utf8;
+        last.segs += 1;
+      } else pieces.push({ startMs, utf8, segs: 1, offset: num(seg?.tOffsetMs) !== null });
+    }
+
     let atStart = true;
-    ev.segs.forEach((seg, k) => {
-      const text = speakerStripped(segText(seg), atStart);
+    pieces.forEach((p, k) => {
+      const text = speakerStripped(segText(p), atStart);
       if (!text) return;
       atStart = false;
-      const startMs = segStart(seg);
       const parts = text
         .split(' ')
         .map((w) => speakerStripped(w, false))
         .filter(Boolean);
-      if (num(seg.tOffsetMs) !== null || parts.length < 2) {
-        raw.push({ w: text, startMs, endMs });
+      if (parts.length === 0) return;
+      const { startMs } = p;
+      if ((p.segs === 1 && p.offset) || parts.length === 1) {
+        raw.push({ w: parts.join(' '), startMs, endMs });
         return;
       }
-      const next = ev.segs.slice(k + 1).find((x) => segText(x) && segStart(x) > startMs);
-      let spanEnd = next ? segStart(next) : endMs;
+      const next = pieces.slice(k + 1).find((x) => segText(x) && x.startMs > startMs);
+      let spanEnd = next ? next.startMs : endMs;
+      const nextEv = nextEventStart(startMs);
+      if (nextEv !== null && (spanEnd === null || nextEv < spanEnd)) spanEnd = nextEv;
       if (spanEnd === null || spanEnd <= startMs) spanEnd = startMs + GUESS_WORD_MS * parts.length;
       const weights = parts.map((w) => [...w].length + 1);
       const total = weights.reduce((a, b) => a + b, 0);
@@ -155,26 +189,29 @@ const STACK_WORD_SEC = 0.35;
 
 /**
  * whisper sometimes puts several words on one ~10 ms stamp, so a caption group
- * would flash at once. A run of words whose starts are within 0.03 s of the
- * run's first gets the span from that start to the next word's start (or, at
- * the end of the list, the run's last end), at most 0.35 s a word, split
- * evenly. The run never passes the next word. A word does not move earlier
- * than it started, except by a millisecond or two when the gap before the next
- * word is that tight. `words` is sorted; mutated.
+ * would flash at once. Runs are found on whisper's own starts (`s0`, before the
+ * start clamp, which would pull a long word out of its stack): a run of words
+ * whose `s0` are within 0.03 s of the run's first gets the span from that
+ * start to the next word's `s0` (or, at the end of the list, the run's latest
+ * end), at most 0.35 s a word, split evenly. The run never passes the next
+ * word. A word does not move earlier than whisper started it, except by a
+ * millisecond or two when the gap before the next word is that tight. Words
+ * outside a run keep their `s`. `words` is sorted by `s0`; mutated.
  */
 function spreadStacked(words) {
   let i = 0;
   while (i < words.length) {
     let j = i + 1;
-    while (j < words.length && words[j].s - words[i].s <= STACK_SEC + 1e-9) j++;
+    while (j < words.length && words[j].s0 - words[i].s0 <= STACK_SEC + 1e-9) j++;
     const n = j - i;
     if (n >= 2) {
-      const start = words[i].s;
+      const start = words[i].s0;
       const hasNext = j < words.length;
-      const after = hasNext ? words[j].s : Infinity;
+      const after = hasNext ? words[j].s0 : Infinity;
+      const lastEnd = Math.max(...words.slice(i, j).map((w) => w.e));
       // With a next word the run ends at that word's start, never past it;
-      // the run's last source end only matters when the run ends the list.
-      const end = Math.min(hasNext ? after : words[j - 1].e, start + STACK_WORD_SEC * n);
+      // the run's latest source end only matters when the run ends the list.
+      const end = Math.min(hasNext ? after : lastEnd, start + STACK_WORD_SEC * n);
       // The run must fit below `after` at 1 ms a word; if not, leave it be.
       if (!hasNext || after - start >= n * 0.001) {
         const step = (end - start) / n;
@@ -183,7 +220,7 @@ function spreadStacked(words) {
           // even split first, then the floor (never earlier than the word's own
           // start), then clamp into the gap so every later word keeps 1 ms,
           // then strictly increasing.
-          let s = Math.max(round3(start + k * step), words[i + k].s);
+          let s = Math.max(round3(start + k * step), words[i + k].s0);
           s = Math.min(s, round3(after - (n - k) * 0.001));
           if (k > 0 && s <= starts[k - 1]) s = round3(starts[k - 1] + 0.001);
           starts.push(s);
@@ -225,13 +262,15 @@ export function wordsFromWhisper(j, offsetSec = 0) {
     kept.push({ text, from, to });
   }
   const out = dropNonSpeech(kept, (x) => x.text).map(({ text, from, to }) => {
+    const start = offsetSec + from / 1000;
     const end = offsetSec + to / 1000;
-    const s = round3(Math.max(offsetSec + from / 1000, end - longestWordSec(text)));
+    const s = round3(Math.max(start, end - longestWordSec(text)));
     let e = round3(end);
     if (e <= s) e = round3(s + MIN_WORD_SEC);
-    return { w: text, s, e };
+    return { w: text, s, e, s0: round3(start) };
   });
-  return spreadStacked(out.sort((a, b) => a.s - b.s));
+  spreadStacked(out.sort((a, b) => a.s0 - b.s0));
+  return out.map(({ w, s, e }) => ({ w, s, e })).sort((a, b) => a.s - b.s);
 }
 
 /**

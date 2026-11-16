@@ -21,28 +21,45 @@ function rank(name) {
   return size * 2 + (base.endsWith('.en.bin') ? 1 : 0);
 }
 
-function pickIn(dir) {
+/** The `ggml-*.bin` names in `dir`, best first; [] when it cannot be read. */
+function modelsIn(dir) {
   let names;
   try {
     names = readdirSync(dir);
   } catch {
-    return null;
+    return [];
   }
-  const models = names.filter((n) => /^ggml-.*\.bin$/.test(n)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  return models.length ? join(dir, models[0]) : null;
+  return names.filter((n) => /^ggml-.*\.bin$/.test(n)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
+
+// a language that is set and is not English: an `.en` model cannot hear it
+const notEnglish = (lang) => typeof lang === 'string' && lang !== '' && lang !== 'auto' && lang.split(/[-_]/)[0].toLowerCase() !== 'en';
 
 /**
  * The whisper model to use: `BOQO_WHISPER_MODEL`, then `ggml-*.bin` in
  * `$BOQO_HOME/models`, then in `~/.cache/whisper`. Within a folder `small` wins,
- * then `base`, then any other.
+ * then `base`, then any other. For a language that is not English (`lang`
+ * set, not `auto`), a multilingual model of any size in either folder comes
+ * first; only `.en` models: the best of those.
  * @param {string} [home] the home folder (tests pass their own)
+ * @param {string} [lang] the language asked for, default auto
  * @returns {string|null}
  */
-export function findModel(home = homedir()) {
+export function findModel(home = homedir(), lang = 'auto') {
   const pinned = process.env.BOQO_WHISPER_MODEL;
   if (pinned && existsSync(pinned)) return pinned;
-  return pickIn(join(boqoHome(), 'models')) ?? pickIn(join(home, '.cache', 'whisper'));
+  const dirs = [join(boqoHome(), 'models'), join(home, '.cache', 'whisper')];
+  if (notEnglish(lang)) {
+    for (const d of dirs) {
+      const m = modelsIn(d).find((n) => !isEnglishOnly(n));
+      if (m) return join(d, m);
+    }
+  }
+  for (const d of dirs) {
+    const [m] = modelsIn(d);
+    if (m) return join(d, m);
+  }
+  return null;
 }
 
 /**
@@ -145,7 +162,7 @@ export async function transcribeDetailed(file, o = {}) {
   }
   const start = hasS ? s : 0;
 
-  const model = findModel();
+  const model = findModel(undefined, lang);
   if (!model) throw noModel();
   await probeWhisper();
 

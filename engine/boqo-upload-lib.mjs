@@ -1,4 +1,5 @@
-// (copied from boqo-ai/boqount, MIT)
+// (copied from boqo-ai/boqount, MIT; one change: `probe` reads any container, and names one boqo does not take
+// as a reason instead of failing, so the skill can read a local file's length through it)
 // The mechanical half of publishing through boqo's MCP: probe a video, build the caption-safe upload file
 // name, and PUT the parts a `create_upload` reply asks for. The CLI is tools/boqo-upload.mjs; the tests are
 // tests/boqo-upload.test.mjs.
@@ -163,11 +164,21 @@ export async function run(argv, deps) {
     if (command === "probe") {
       const file = args[0];
       if (!file) return fail("usage: probe <file>");
-      const contentType = contentTypeOf(file);
+      let contentType = null;
+      try {
+        contentType = contentTypeOf(file);
+      } catch {
+        /* named below as a reason */
+      }
       const sizeBytes = (await deps.stat(file)).size;
       const res = await deps.exec("ffprobe", ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file]);
       const ffprobe = JSON.parse(typeof res === "string" ? res : res.stdout);
-      return { code: 0, line: JSON.stringify({ file, sizeBytes, contentType, ...probeVerdict(ffprobe, sizeBytes) }) };
+      const verdict = probeVerdict(ffprobe, sizeBytes);
+      if (!contentType) {
+        verdict.reasons.unshift(`unsupported container: ${extname(file) || "(no extension)"}`);
+        verdict.passthrough = false;
+      }
+      return { code: 0, line: JSON.stringify({ file, sizeBytes, contentType, ...verdict }) };
     }
     if (command === "put") {
       const { value: replyPath, rest } = flag(args, "--reply");
