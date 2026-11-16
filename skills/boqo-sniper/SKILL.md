@@ -14,8 +14,8 @@ the stream into a 12-minute buffer, reads its chat and its loudness, and cuts a 
 brand and post it only by their rule (`post.md`). Everything runs on this PC; boqo's servers are touched only to
 post.
 
-**This is a live session, not a run.** It lasts until the person says stop, the stream has been offline for 10
-minutes, or this chat closes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
+**This is a live session, not a run.** It lasts until the person says stop or the stream has been offline for 10
+minutes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
 two chats, as many as the PC carries.
 
 - **Tools:** `node "$HOME/.boqo-sniper/tools/<tool>.mjs"`, always by that path. Commands are for a POSIX shell (macOS,
@@ -53,8 +53,9 @@ two chats, as many as the PC carries.
 - **The person's language.** Answer in the language the person writes in. Titles are in the stream's language.
   Files stay in English.
 - **Short messages:** what happened, what comes next. No tour of the tools unless asked.
-- **Long commands:** `next.mjs` waits up to 540 s, and whisper and render take a minute or two each on a CPU. Give
-  every command in the loop up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
+- **Long commands:** `next.mjs` runs with `--timeout 170`: Claude Code moves a command to the background after about
+  180 s, whatever its timeout. whisper and render take a minute or two each on a CPU. Give every command in the loop
+  up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
 - **Disk:** the watcher keeps about 650 MB of buffer while it runs (1080p60), and every moment adds about 140 MB until
   you delete its `video.mp4` (The loop, steps 4 and 6). It does not cut a new moment while 10 wait unjudged or less
   than 3 GB is free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`).
@@ -85,7 +86,8 @@ two chats, as many as the PC carries.
    ```
    `True` is live. `… does not exist`: say so, and stop. `… is not currently live`: say the channel is offline, and
    offer to start anyway (the watch waits for it, and ends after 10 minutes offline). On a no, stop.
-4. **Start the watcher in the background,** so this chat stays free:
+4. **Start the watcher in the background,** so this chat stays free. First `date -u +%Y%m%d-%H%M%S`: keep it as
+   `<start stamp>`. Then:
    - Claude Code: the shell tool with `run_in_background: true`, and the command
      ```sh
      node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --sensitivity <n>
@@ -97,16 +99,18 @@ two chats, as many as the PC carries.
        > "<home>/boqo-sniper/watch/<channel>.log" 2>&1 &
      ```
 5. **Check it runs.** `node "$HOME/.boqo-sniper/tools/status.mjs" "<channel>"` about every 10 s, for up to a minute,
-   until `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute. Keep its
-   `session`. When the watcher ends instead, its one line (Claude Code: the background task's output; elsewhere the
-   `.log` file) says why:
+   until `state` is `live` (recording) or `waiting` (no picture yet) with `updatedAt` in the last minute, and the
+   name of its `session` (the folder's last part) is at or after `<start stamp>`: an earlier name is another watch's
+   folder, not this one's, so keep checking. Keep that `session`. When the watcher ends instead, its one line (Claude
+   Code: the background task's output; elsewhere the `.log` file) says why:
    - `already watching <channel> …`: another chat, or an earlier one, is watching this channel. Ask whether to stop
      that watch and watch here instead; on a yes, `stop.mjs "<channel>"` (The end → Stop), then step 4 again.
    - any other error: say it (Rules).
 6. **Tell the person,** in two or three lines: you are watching `<channel>` and clip the moments chat goes wild,
-   until they say stop or the stream ends. In Claude Code, closing this chat stops the watch too. Elsewhere, ask
-   them to say stop before closing the agent: a watch left running ends by itself only 10 minutes after the stream
-   goes offline. With the `ask` rule, each clip waits for their yes to post (Posting).
+   until they say stop or the stream ends. Say stop before you close the agent; if you didn't, the next start cleans
+   up, and `status.mjs "<channel>"` shows whether a watch is still running. Posting (one rule, Posting): with boqo's
+   tools and the `ask` rule, each clip waits for their yes; with no boqo tools, posting is off for the session and
+   no clip waits.
 
 Note the time you started: the session's watched time is counted from it.
 
@@ -116,8 +120,10 @@ Repeat until The end.
 
 1. **Wait for a moment.**
    ```sh
-   node "$HOME/.boqo-sniper/tools/next.mjs" "<channel>"
+   node "$HOME/.boqo-sniper/tools/next.mjs" "<channel>" --timeout 170
    ```
+   If a call still comes back as a background notice instead of its line, wait for its completion notification and
+   read its output then. Never start a second `next.mjs` while one runs: each claims the moment it finds.
    - `{"moment": "<moment>", "meta": {…}}`: go on with step 2.
    - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 4 minutes
      old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up, and never signals a process that
@@ -127,7 +133,9 @@ Repeat until The end.
    ```sh
    node "$HOME/.boqo-sniper/tools/asr.mjs" "<moment>/video.mp4" --out "<moment>/words.json"
    ```
-   `{"words": 0, …}` is a moment with no speech, gameplay or music only: judge it on chat and the frames.
+   `{"words": 0, …}` is a moment with no speech, gameplay or music only: judge it on chat and the stills. Skip
+   `moment.mjs words` in step 3 and every `--find` (`transcript.mjs` refuses an empty words file): set the edges in
+   step 5 from the stills and `chatPerSec`; they stay where you put them.
 3. **Read it**, with the moment tool. Never read `chat.json` or `words.json` whole: a busy chat writes hundreds of KB.
    ```sh
    node "$HOME/.boqo-sniper/tools/moment.mjs" read "<moment>"
@@ -184,16 +192,17 @@ quiet.
 after a batch) does not apply. Its steps run once per session, then once per clip:
 - **Once, before the first clip is offered or posted,** post.md → Before the first clip, steps 1, 2 and 4: the boqo
   tools, the plan and the accounts. Its step 3, the rule, runs for each clip as below. Posting is off for the rest of
-  the session, and no clip waits for an answer, when:
-  - there are no boqo tools;
+  the session, and no clip waits for an answer, whatever the rule says, when:
+  - there are no boqo tools: the clips land on disk. When the person asks to post, give the one line from
+    onboarding.md → 2;
   - the plan has no publishing: say once, "Autoposting comes with the 7-day trial or Starter from $12";
   - no account is active: say once that they connect or reconnect one in boqo, under Accounts. When they say it is
     connected, run steps 2 and 4 again.
-- **`ask`:** after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you wait the loop
-  is paused: the watch keeps recording and moments queue up for when they answer. Offer the hands-free rule once:
+- **`ask`,** with posting on: after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you
+  wait the loop is paused: the watch keeps recording and up to 10 moments queue up for when they answer. Offer the hands-free rule once:
   post automatically, up to N a day, to the accounts they name (onboarding.md → The posting rule writes it). A no,
   or "later": the clip stays on disk; back to the loop.
-- **`{"auto": N}`:** today's posts so far are
+- **`{"auto": N}`,** with posting on: today's posts so far are
   ```sh
   grep "^$(date +%F) " "<home>/boqo-sniper/runs.md" | grep -cF "| posted 1"
   ```

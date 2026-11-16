@@ -11,7 +11,8 @@ logo. It posts the clip only by the rule you set. The session runs until you say
 
 ## Install
 
-Tell your agent (Claude Code, Cursor, Codex, or any agent that reads skills):
+Tell your agent (tested with Claude Code; any agent with a terminal, such as Cursor or Codex, can follow the same
+steps):
 
 > Read https://raw.githubusercontent.com/boqo-ai/boqo-sniper/main/INSTALL.md and follow it.
 
@@ -35,6 +36,8 @@ The install's doctor names what is missing and how to get it on macOS, Windows a
 Everything runs on your PC: the capture, chat, transcription, judging (by your own agent's model) and render. Your
 clips stay on your disk. Posting goes through boqo: autoposting comes with the 7-day trial, or with Starter from $12.
 Without boqo you keep the files.
+
+Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai) — that runs on credits.
 
 ## Hardware
 

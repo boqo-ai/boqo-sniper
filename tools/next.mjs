@@ -8,7 +8,9 @@
 //   {"stopped": "<state>"}               watcher offline/stopped, or no session
 //   {"stopped": "failed", "error": "..."} the watcher ended on an error
 //   {"timeout": true, "status": {...}}   nothing came in time
-// Never waits past 540 s: Claude Code caps one shell command at 600 s.
+// Never waits past 540 s: Claude Code caps one shell command at 600 s. The skill
+// passes --timeout 170, since Claude Code moves a command to the background
+// after about 180 s whatever its timeout.
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
