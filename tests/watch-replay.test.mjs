@@ -376,3 +376,72 @@ test("a source that errors mid-run fails the watcher: status.json and next say f
     await fs.rm(work, { recursive: true, force: true });
   }
 });
+
+test("a capture that keeps failing while the channel is live ends failed, with what the capture said", { timeout: 120000 }, async () => {
+  const work = await tmp("capfail");
+  const home = path.join(work, "home");
+  try {
+    const env = {
+      BOQO_HOME: home,
+      // the source dies at once, every time, with a reason on stderr; the poller says the channel is live
+      BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, "-e", 'console.error("ERROR: HTTP Error 403: Forbidden"); process.exit(1)']),
+      BOQO_SNIPER_TEST_LIVE: "1",
+      BOQO_SNIPER_POLL_MS: "50",
+    };
+    const r = await run(WATCH, ["capfail"], env);
+    await assertFailed(r, await onlySession(home, "capfail"), "capfail", env, /403: Forbidden/);
+    assert.match(r.json.error, /10 times/);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test(
+  "a stalled source that ignores SIGTERM is killed hard and the watcher moves on",
+  { timeout: 90000, skip: process.platform === "win32" ? "taskkill /F is already a hard kill" : false },
+  async () => {
+    const work = await tmp("stubborn");
+    const home = path.join(work, "home");
+    try {
+      await makeSegments(path.join(work, "segs"), 1);
+      const hang = path.join(work, "hang.mjs");
+      await fs.writeFile(
+        hang,
+        'import fs from "node:fs";\nprocess.on("SIGTERM", () => {});\nprocess.stdout.write(fs.readFileSync(process.argv[2]));\nsetInterval(() => {}, 1e6);\n',
+      );
+      const env = {
+        BOQO_HOME: home,
+        BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, hang, path.join(work, "segs", "000.ts")]),
+        BOQO_SNIPER_STALL_SEC: "3",
+        BOQO_SNIPER_POLL_MS: "100",
+      };
+      const t0 = Date.now();
+      const r = await run(WATCH, ["stubborn"], env);
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stderr, /capture stalled/);
+      assert.equal(r.json.state, "offline");
+      assert.ok(Date.now() - t0 < 60000, "SIGKILL followed within seconds");
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
+  },
+);
+
+test("an uncaught exception or an unhandled rejection fails the watcher, and status.json says why", { timeout: 120000 }, async () => {
+  for (const kind of ["throw", "reject"]) {
+    const work = await tmp(`crash-${kind}`);
+    const home = path.join(work, "home");
+    try {
+      await makeSegments(path.join(work, "segs"), 6);
+      await makeChat(path.join(work, "chat.jsonl"), 60, null);
+      const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_REPLAY_SPEED: "1", BOQO_SNIPER_TEST_CRASH: kind };
+      const r = await run(WATCH, ["crashy", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+      const session = await onlySession(home, "crashy");
+      await assertFailed(r, session, "crashy", env, new RegExp(`test crash \\(${kind}\\)`));
+      const buf = (await fs.readdir(path.join(session, "buf"))).filter((f) => f.endsWith(".ts"));
+      assert.deepEqual(buf, [], `${kind}: a crashed run empties its buffer`);
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
+  }
+});

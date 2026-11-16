@@ -29,9 +29,17 @@
 // n simulated seconds per real second). When the segments end, offline polling
 // is stubbed: every poll says offline.
 //
-// Knobs: BOQO_SNIPER_POLL_MS (offline poll interval, default 60000),
-// BOQO_SNIPER_HORIZON_SEC (buffer length, default 720) and BOQO_SNIPER_KEEP_BUF=1
-// (leave the segments on disk at exit) exist for tests.
+// Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
+// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 720),
+// BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
+// BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
+// BOQO_SNIPER_TEST_LIVE=1 (that source's channel polls live) and
+// BOQO_SNIPER_TEST_CRASH=throw|reject (a crash 300 ms in).
+//
+// A capture that makes nothing 10 times in a row while the channel says live
+// fails the run with what the capture printed; an uncaught exception or an
+// unhandled rejection fails it too, so status.json never stays "live" for a
+// process that is gone.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -55,6 +63,10 @@ import { measureLoudness } from "../lib/loudness.mjs";
 import { captureCommand as sourceCommand, chooseCapture, readConfig, stallSecFor } from "../lib/capture.mjs";
 
 export const MAX_OFFLINE_POLLS = 10;
+/** Captures in a row that made nothing while the channel said live: the watcher fails with the capture's last words. */
+export const MAX_FAILED_CAPTURES = 10;
+/** A source still running this long after SIGTERM gets SIGKILL. */
+const KILL_GRACE_MS = 5000;
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
@@ -63,8 +75,13 @@ function fail(message) {
 
 /** The session this process owns (its watch.pid is ours), once it has one. */
 let owned = null;
+/** The capture running now, so a crash can end it too. */
+let capture = null;
 
-/** Fail a run whose session exists: status.json says failed and why, the pid file goes, then {"error"} and exit 1. */
+/**
+ * Fail a run whose session exists: status.json says failed and why, the
+ * buffer and the pid file go, then {"error"} and exit 1.
+ */
 async function failSession(message) {
   if (owned) {
     const now = new Date().toISOString();
@@ -80,10 +97,23 @@ async function failSession(message) {
         error: message,
       });
     } catch {}
-    await fs.rm(path.join(owned.dir, "watch.pid"), { force: true }).catch(() => {});
+    await cleanupSession(owned.dir).catch(() => {});
   }
   fail(message);
 }
+
+// A bug must not leave a "live" status nobody updates: say failed and why, and exit 1.
+let crashed = false;
+function crash(err) {
+  if (crashed) return;
+  crashed = true;
+  try {
+    capture?.kill();
+  } catch {}
+  failSession(`watcher crashed: ${err?.message || String(err)}`);
+}
+process.on("uncaughtException", crash);
+process.on("unhandledRejection", crash);
 
 export function parseArgs(argv) {
   const o = { channel: null, sensitivity: 70, replay: null, chat: null };
@@ -234,21 +264,49 @@ function segmenterArgs() {
  * End a child and everything it started. yt-dlp runs its own ffmpeg that
  * outlives it (measured 2026-11-15: after SIGTERM to yt-dlp, that ffmpeg kept
  * running and held the pipe open), so on POSIX the source is its own process
- * group and the whole group gets the signal; on Windows taskkill walks the tree.
+ * group and the whole group gets the signal; on Windows taskkill walks the
+ * tree, already a hard kill. On POSIX whatever still runs KILL_GRACE_MS after
+ * the SIGTERM gets SIGKILL: a source that ignores SIGTERM would otherwise keep
+ * the watcher waiting on it for ever.
  */
+const killing = new WeakSet();
 function killTree(child) {
-  if (child.pid === undefined) return;
+  if (child.pid === undefined || killing.has(child)) return;
+  killing.add(child);
   if (process.platform === "win32") {
     spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
     return;
   }
+  let group = true;
   try {
     process.kill(-child.pid, "SIGTERM");
   } catch {
+    group = false;
     try {
       child.kill("SIGTERM");
     } catch {}
   }
+  const running = () => {
+    if (!group) return child.exitCode === null && child.signalCode === null;
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const deadline = Date.now() + KILL_GRACE_MS;
+  const timer = setInterval(() => {
+    if (!running()) {
+      clearInterval(timer);
+    } else if (Date.now() >= deadline) {
+      clearInterval(timer);
+      try {
+        if (group) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {}
+    }
+  }, 250);
 }
 
 /** Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline. */
@@ -303,7 +361,8 @@ function startCapture(tool, channel, bufDir) {
 }
 
 async function isLive(tool, channel) {
-  if (tool === "test-source") return false;
+  // tests: BOQO_SNIPER_TEST_LIVE=1 makes the test source's channel say live
+  if (tool === "test-source") return process.env.BOQO_SNIPER_TEST_LIVE === "1";
   if (await hasTool("yt-dlp")) {
     const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", `https://www.twitch.tv/${channel}`], {
       timeoutMs: 45000,
@@ -381,6 +440,15 @@ async function main() {
     fail(err.code === "EEXIST" ? `already watching ${channel} (${dir})` : err.message);
   }
   owned = { dir, channel, moments: 0 };
+  // tests: BOQO_SNIPER_TEST_CRASH=throw|reject crashes the run 300 ms after its session exists
+  const testCrash = process.env.BOQO_SNIPER_TEST_CRASH;
+  if (testCrash === "throw" || testCrash === "reject") {
+    setTimeout(() => {
+      const err = new Error(`test crash (${testCrash})`);
+      if (testCrash === "throw") throw err;
+      Promise.reject(err);
+    }, 300);
+  }
 
   // Replay material is read up front so a bad path fails before anything runs.
   let replayFiles = [];
@@ -425,7 +493,7 @@ async function main() {
   let state = "waiting";
   let since = iso(clock.now());
   let stopRequested = false;
-  let capture = null;
+  let lastCaptureTail = "";
   let warnedTz = false;
   let failMessage = null;
 
@@ -437,6 +505,7 @@ async function main() {
   };
 
   async function writeStatus() {
+    if (crashed) return; // the crash handler's "failed" is the last word
     const now = clock.now();
     let recent = 0;
     for (let i = chatLog.length - 1; i >= 0 && chatLog[i].t >= now - 30; i--) recent++;
@@ -647,7 +716,8 @@ async function main() {
     }
     if (!over) capture.kill();
     await capture.closed;
-    if (totalSegments === before) console.error(`capture made no segments:\n${capture.tail()}`);
+    lastCaptureTail = capture.tail();
+    if (totalSegments === before) console.error(`capture made no segments:\n${lastCaptureTail}`);
     capture = null;
   }
 
@@ -695,13 +765,18 @@ async function main() {
       if (totalSegments > before) {
         offlinePolls = 0;
         failedCaptures = 0;
-      } else failedCaptures++;
+      } else if (++failedCaptures >= MAX_FAILED_CAPTURES) {
+        // Every capture after the first starts only once the channel says live:
+        // this is a capture that cannot record a live stream, not an offline one.
+        throw new Error(
+          `the capture made nothing ${failedCaptures} times in a row while the channel was live: ${lastCaptureTail.trim() || "no output"}`,
+        );
+      }
       setState("waiting");
       await writeStatus();
 
       let live = false;
-      // A "live" channel whose capture keeps making nothing also ends, after as many tries.
-      while (!live && offlinePolls < MAX_OFFLINE_POLLS && failedCaptures < MAX_OFFLINE_POLLS) {
+      while (!live && offlinePolls < MAX_OFFLINE_POLLS) {
         await nap(pollSec);
         if (await checkStop()) break;
         live = replay ? false : await isLive(tool, channel);
