@@ -23,11 +23,19 @@ jobs:
       - name: Install ffmpeg (ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      # ffmpeg-full is keg-only and stays off PATH here, as in an agent's shell:
+      # the engine's toolEnv() has to find it by itself (as in boqo-clips' CI).
       - name: Install ffmpeg (macos)
         if: runner.os == 'macOS'
         run: |
           brew install ffmpeg-full
-          echo "$(brew --prefix ffmpeg-full)/bin" >> $GITHUB_PATH
+          # This runner's Homebrew links ffmpeg-full into /opt/homebrew/bin (boqo-clips CI, 2026-11-16).
+          # Unlink it, as keg-only would leave it: only /opt/homebrew/opt/ffmpeg-full/bin stays.
+          brew unlink ffmpeg-full
+          ls /opt/homebrew/opt/ffmpeg-full/bin/ffmpeg
+          if ! command -v ffmpeg; then echo "no ffmpeg on PATH: the tests find ffmpeg-full only through toolEnv"
+          elif ffmpeg -hide_banner -filters | grep -qE '^ *[^ ]+ +ass '; then echo "::warning::the ffmpeg on PATH has libass; the toolEnv check proves less"
+          else echo "the ffmpeg on PATH has no libass: the libass tests pass only through toolEnv"; fi
       - name: Install ffmpeg (windows)
         if: runner.os == 'Windows'
         run: choco install ffmpeg-full -y

@@ -43,6 +43,9 @@
 // process that is gone.
 
 import { spawn } from "node:child_process";
+// Every process starts with toolEnv(): on macOS it puts keg-only ffmpeg-full first on PATH, for
+// the segmenter, the loudness probe and the ffmpeg yt-dlp runs itself.
+import { toolEnv } from "../engine/env.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDetector } from "../lib/detector.mjs";
@@ -195,7 +198,7 @@ function hasTool(cmd, arg = "--version") {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(cmd, [arg], { stdio: "ignore", windowsHide: true });
+      child = spawn(cmd, [arg], { stdio: "ignore", env: toolEnv(), windowsHide: true });
     } catch {
       resolve(false);
       return;
@@ -212,7 +215,7 @@ function runOnce(cmd, args, { cwd, timeoutMs = 60000 } = {}) {
     let stderr = "";
     let child;
     try {
-      child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: toolEnv(), windowsHide: true });
     } catch (err) {
       resolve({ code: -1, stdout, stderr: String(err) });
       return;
@@ -299,7 +302,7 @@ function killTree(child) {
 
 function taskkillTree(child) {
   return new Promise((resolve) => {
-    const tk = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    const tk = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", env: toolEnv(), windowsHide: true });
     tk.on("error", () => resolve());
     tk.on("exit", () => resolve());
   });
@@ -357,11 +360,16 @@ function startCapture(tool, channel, bufDir) {
     tail.push(`${who}: ${String(d).trim()}`);
     if (tail.length > 12) tail.shift();
   };
-  const src = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
+  const src = spawn(cmd, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: toolEnv(),
+    windowsHide: true,
+    detached: process.platform !== "win32",
+  });
   const ff = spawn("ffmpeg", segmenterArgs(), {
     cwd: bufDir,
     stdio: ["pipe", "ignore", "pipe"],
-    env: { ...process.env, TZ: "UTC0" },
+    env: { ...toolEnv(), TZ: "UTC0" },
     windowsHide: true,
   });
   src.stderr.on("data", note(cmd));

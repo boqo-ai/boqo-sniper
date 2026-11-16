@@ -26,6 +26,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { toolEnv } from "../engine/env.mjs";
 import {
   AFTER_PEAK_SEC,
   BEFORE_PEAK_SEC,
@@ -127,7 +128,7 @@ function cmdFrames(argv) {
     const r = spawnSync(
       "ffmpeg",
       ["-v", "error", "-nostdin", "-y", "-ss", String(t), "-i", video, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", name],
-      { cwd: out, encoding: "utf8", windowsHide: true },
+      { cwd: out, encoding: "utf8", env: toolEnv(), windowsHide: true },
     );
     if (r.error) throw new Error(`ffmpeg could not run: ${r.error.code ?? r.error.message}`);
     const file = path.join(out, name);

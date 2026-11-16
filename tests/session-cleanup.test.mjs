@@ -16,6 +16,7 @@ import {
   STALE_STATUS_SEC,
   STOP_WAIT_MS,
 } from "../lib/session.mjs";
+import { toolEnv } from "../engine/env.mjs";
 
 const WATCH = fileURLToPath(new URL("../tools/watch.mjs", import.meta.url));
 const STOP = fileURLToPath(new URL("../tools/stop.mjs", import.meta.url));
@@ -141,7 +142,7 @@ test("a new watcher sweeps what a hard-killed one left, and stop.mjs does the sa
     const gen = spawnSync(
       "ffmpeg",
       ["-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=10", "-c:a", "aac", "-f", "mpegts", seg],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: toolEnv() },
     );
     assert.equal(gen.status, 0, gen.stderr);
     await fs.mkdir(path.join(home, "replay"));

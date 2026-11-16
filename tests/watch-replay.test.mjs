@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { stamp } from "../lib/session.mjs";
 import { segmentName } from "../lib/buffer.mjs";
+import { toolEnv } from "../engine/env.mjs";
 
 const WATCH = fileURLToPath(new URL("../tools/watch.mjs", import.meta.url));
 const STOP = fileURLToPath(new URL("../tools/stop.mjs", import.meta.url));
@@ -30,7 +31,7 @@ async function makeSegments(dir, count) {
       "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-f", "mpegts", first,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: toolEnv() },
   );
   assert.equal(r.status, 0, r.stderr);
   for (let i = 1; i < count; i++) await fs.copyFile(first, path.join(dir, `${String(i).padStart(3, "0")}.ts`));
@@ -86,7 +87,7 @@ function run(script, args, env) {
 
 /** Minutes and seconds ffmpeg prints for a file, as seconds. */
 function durationOf(file) {
-  const r = spawnSync("ffmpeg", ["-hide_banner", "-i", file], { encoding: "utf8" });
+  const r = spawnSync("ffmpeg", ["-hide_banner", "-i", file], { encoding: "utf8", env: toolEnv() });
   const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(r.stderr);
   assert.ok(m, `no duration in: ${r.stderr}`);
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { parseEbur128, measureLoudness, LOUDNESS_FLOOR } from "../lib/loudness.mjs";
+import { toolEnv } from "../engine/env.mjs";
 
 test("parseEbur128 reads the summary I: LUFS, not a progress line", () => {
   const stderr = [
@@ -34,11 +35,12 @@ test("parseEbur128 on a real ebur128 summary from ffmpeg", async () => {
     const gen = spawnSync(
       "ffmpeg",
       ["-nostdin", "-y", "-hide_banner", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", wav],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: toolEnv() },
     );
     assert.equal(gen.status, 0, gen.stderr);
     const r = spawnSync("ffmpeg", ["-nostdin", "-hide_banner", "-nostats", "-i", wav, "-af", "ebur128", "-f", "null", "-"], {
       encoding: "utf8",
+      env: toolEnv(),
     });
     const lufs = parseEbur128(r.stderr);
     assert.equal(typeof lufs, "number");

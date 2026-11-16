@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { FRAME_OFFSETS, chatRates, frameName, frameTimes, normalizeChat, parseOffsets, topChat, wordLines } from "../lib/moment.mjs";
+import { toolEnv } from "../engine/env.mjs";
 
 const MOMENT = fileURLToPath(new URL("../tools/moment.mjs", import.meta.url));
 
@@ -41,7 +42,7 @@ function makeVideo(file, seconds) {
       "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", file,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: toolEnv() },
   );
   assert.equal(r.status, 0, r.stderr);
 }
