@@ -505,3 +505,59 @@ test("too little free disk skips a moment, and status.json counts it", { timeout
     await fs.rm(work, { recursive: true, force: true });
   }
 });
+
+test(
+  "after a stop nothing the capture started still runs, even a grandchild that ignores SIGTERM",
+  { timeout: 90000, skip: process.platform === "win32" ? "taskkill /T /F ends the tree at once" : false },
+  async () => {
+    const work = await tmp("tree");
+    const home = path.join(work, "home");
+    try {
+      await makeSegments(path.join(work, "segs"), 1);
+      // like yt-dlp: the source runs a helper (here one that shrugs off SIGTERM), then streams
+      const helper = path.join(work, "helper.mjs");
+      await fs.writeFile(helper, 'process.on("SIGTERM", () => {});\nsetInterval(() => {}, 1e6);\n');
+      const pidFile = path.join(work, "helper.pid");
+      const source = path.join(work, "source.mjs");
+      await fs.writeFile(
+        source,
+        [
+          'import fs from "node:fs";',
+          'import { spawn } from "node:child_process";',
+          `const h = spawn(process.execPath, [${JSON.stringify(helper)}], { stdio: "ignore" });`,
+          `fs.writeFileSync(${JSON.stringify(pidFile)}, String(h.pid));`,
+          "process.stdout.write(fs.readFileSync(process.argv[2]));",
+          "setInterval(() => {}, 1e6);",
+          "",
+        ].join("\n"),
+      );
+      const env = {
+        BOQO_HOME: home,
+        BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, source, path.join(work, "segs", "000.ts")]),
+        BOQO_SNIPER_POLL_MS: "200",
+      };
+      const watching = run(WATCH, ["tree"], env);
+      await waitForSession(home, "tree");
+      let helperPid = null;
+      for (let i = 0; i < 100 && !helperPid; i++) {
+        helperPid = Number(await fs.readFile(pidFile, "utf8").catch(() => "")) || null;
+        if (!helperPid) await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.ok(helperPid, "the source started its helper");
+      const stopped = await run(STOP, ["tree"], env);
+      assert.equal(stopped.json.stopped, true, stopped.stdout);
+      const done = await watching;
+      assert.equal(done.json.state, "stopped", done.stderr);
+      let alive = true;
+      try {
+        process.kill(helperPid, 0);
+      } catch {
+        alive = false;
+      }
+      if (alive) process.kill(helperPid, "SIGKILL");
+      assert.equal(alive, false, "the helper was still running when stop.mjs returned");
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
+  },
+);

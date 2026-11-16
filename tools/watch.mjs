@@ -284,14 +284,29 @@ function segmenterArgs() {
  * the SIGTERM gets SIGKILL: a source that ignores SIGTERM would otherwise keep
  * the watcher waiting on it for ever.
  */
-const killing = new WeakSet();
+const killing = new WeakMap(); // child -> the promise its kill settles
+/** Kills under way; the watcher waits for them before it exits, so stop.mjs returns on a dead tree. */
+const kills = new Set();
 function killTree(child) {
-  if (child.pid === undefined || killing.has(child)) return;
-  killing.add(child);
-  if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
-    return;
-  }
+  if (child.pid === undefined) return Promise.resolve();
+  if (killing.has(child)) return killing.get(child);
+  const done = process.platform === "win32" ? taskkillTree(child) : signalTree(child);
+  killing.set(child, done);
+  kills.add(done);
+  done.then(() => kills.delete(done));
+  return done;
+}
+
+function taskkillTree(child) {
+  return new Promise((resolve) => {
+    const tk = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    tk.on("error", () => resolve());
+    tk.on("exit", () => resolve());
+  });
+}
+
+/** SIGTERM to the group, SIGKILL to whatever of it still runs KILL_GRACE_MS later; resolves once it is all gone. */
+function signalTree(child) {
   let group = true;
   try {
     process.kill(-child.pid, "SIGTERM");
@@ -311,17 +326,27 @@ function killTree(child) {
     }
   };
   const deadline = Date.now() + KILL_GRACE_MS;
-  const timer = setInterval(() => {
-    if (!running()) {
-      clearInterval(timer);
-    } else if (Date.now() >= deadline) {
-      clearInterval(timer);
-      try {
-        if (group) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {}
-    }
-  }, 250);
+  return new Promise((resolve) => {
+    let hard = false;
+    const timer = setInterval(() => {
+      if (!running()) {
+        clearInterval(timer);
+        resolve();
+      } else if (hard) {
+        // SIGKILL cannot be ignored; give the kernel a moment, then stop waiting
+        if (Date.now() >= deadline + 2000) {
+          clearInterval(timer);
+          resolve();
+        }
+      } else if (Date.now() >= deadline) {
+        hard = true;
+        try {
+          if (group) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch {}
+      }
+    }, 100);
+  });
 }
 
 /** Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline. */
@@ -369,7 +394,7 @@ function startCapture(tool, channel, bufDir) {
   return {
     closed: Promise.all([srcDone, ffDone]).then(() => undefined),
     kill() {
-      killTree(src);
+      return killTree(src);
     },
     tail: () => tail.join("\n"),
   };
@@ -835,6 +860,8 @@ async function main() {
   } catch (err) {
     exitError ??= err;
   }
+  // yt-dlp's own ffmpeg can outlive yt-dlp: wait until the whole capture tree is gone
+  await Promise.all([...kills]);
   if (exitError) failMessage = exitError.message || String(exitError);
   setState(exitError ? "failed" : stopped ? "stopped" : "offline");
   if (!keepBuf) {
