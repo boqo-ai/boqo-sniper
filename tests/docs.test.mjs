@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TOOLS = join(ROOT, 'tools');
 const SKILL_DIR = join(ROOT, 'skills', 'boqo-sniper');
+// A checkout on Windows may carry CRLF line ends.
+const readDoc = (f) => readFileSync(join(SKILL_DIR, f), 'utf8').replace(/\r\n/g, '\n');
 const docs = readdirSync(SKILL_DIR).filter((f) => f.endsWith('.md'));
 
 // A tool's flags may be read in its own file or in the engine module it delegates to.
@@ -25,7 +27,7 @@ test('every skill doc is checked, and the engine copies carry their header', () 
   const engine = JSON.parse(readFileSync(join(ROOT, 'engine', 'ENGINE.json'), 'utf8'));
   const sha = engine.commit.slice(0, 7);
   for (const f of ['onboarding.md', 'panels.md', 'post.md', 'select.md', 'stranger.md']) {
-    const head = readFileSync(join(SKILL_DIR, f), 'utf8').split('\n', 1)[0];
+    const head = readDoc(f).split('\n', 1)[0];
     assert.equal(head, `<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/${f} @ ${sha}; keep in step -->`, `${f} is not the copy of the synced boqo-clips`);
   }
 });
@@ -51,7 +53,7 @@ function problems(text, read = sourceOf) {
 test('the commands in the skill docs name tools and flags that exist', () => {
   let checked = 0;
   for (const f of docs) {
-    const r = problems(readFileSync(join(SKILL_DIR, f), 'utf8'));
+    const r = problems(readDoc(f));
     assert.deepEqual(r.found, [], f);
     checked += r.flags;
   }
