@@ -16,7 +16,8 @@ import {
 } from "../lib/capture.mjs";
 import { spawn } from "node:child_process";
 import { toolEnv } from "../engine/env.mjs";
-import { createSecondMax, lineReader, parseLoudnessLine } from "../lib/loudness.mjs";
+import { lineReader, parseLoudnessLine } from "../lib/loudness.mjs";
+import { SecondBuckets } from "../lib/boqo/buckets.mjs";
 import { CAPTURE_STALL_SEC } from "../lib/boqo/watch-constants.mjs";
 
 test("yt-dlp records by default, even with streamlink installed", () => {
@@ -135,10 +136,12 @@ test("the capture's ffmpeg, fed a 13 s stream on stdin, writes 6 s segments and 
     const segments = (await fs.readdir(dir)).filter((f) => /^seg_\d{14}\.ts$/.test(f)).sort();
     assert.equal(segments.length, 3, `13 s in 6 s segments: ${segments}`);
     assert.ok(readings.length >= 125 && readings.length <= 135, `${readings.length} loudness lines for 13 s`);
-    const series = createSecondMax();
-    for (const r of readings) series.add(r.t, r.momentary);
-    assert.ok(series.size >= 12 && series.size <= 14);
-    const steady = series.take(8); // past the 400 ms warm-up, in the middle of a steady tone
+    // keyed by second as the tick feed keys them (stream time here, the clock live)
+    const series = new SecondBuckets();
+    for (const r of readings) series.add(r.t * 1000, r.momentary);
+    const seconds = new Set(readings.map((r) => Math.floor(r.t)));
+    assert.ok(seconds.size >= 12 && seconds.size <= 14);
+    const steady = Math.max(...series.take(8)); // past the 400 ms warm-up, in the middle of a steady tone
     assert.ok(steady > -40 && steady < 0, `momentary loudness ${steady}`);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

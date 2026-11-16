@@ -8,7 +8,6 @@ import {
   concatArgs,
   segmentName,
   parseSegmentName,
-  chatWindowEnd,
   GAP_SEC,
   SEGMENT_SEC,
   POST_ROLL_SEC,
@@ -16,7 +15,6 @@ import {
   WINDOW_SEC,
   HORIZON_SEC,
 } from "../lib/buffer.mjs";
-import { createDetector } from "../lib/detector.mjs";
 
 test("production constants: 6 s segments, 30 s post-roll, a window plus 60 s kept", () => {
   assert.equal(SEGMENT_SEC, 6);
@@ -146,42 +144,6 @@ test("planCut: a new capture is a new run, however close its first start is", ()
   assert.ok(planCut(s, 1050).segments.every((x) => x.cap === 1));
   // segments with no capture number (a replay) join by time alone
   assert.equal(planCut(segs(20), 1100).segments.length, 20);
-});
-
-test("chatWindowEnd: the next segment's start, but never more than SEGMENT_SEC + 1 past this one's", () => {
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1006 }), 1006);
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1007 }), 1007);
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1030 }), 1007, "a 24 s hole is not this segment's chat");
-  assert.equal(chatWindowEnd({ t0: 1000 }, undefined), 1007);
-});
-
-test("an 18 s capture gap does not fire a moment on ordinary chat (the review's gap simulation)", () => {
-  // ~1.2 messages a second from 300 regulars, as the review simulated it
-  let seed = 7;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
-  const msgs = [];
-  for (let t = 0; t < 3600; t += 1) {
-    const k = rnd() < 0.2 ? 2 : 1;
-    for (let j = 0; j < k; j++) msgs.push({ t: t + rnd(), user: "u" + Math.floor(rnd() * 300) });
-  }
-  const uniq = (a, b) => new Set(msgs.filter((m) => m.t >= a && m.t < b).map((m) => m.user)).size;
-  // segment starts: every 6 s, with an 18 s hole after the one at 900
-  const starts = [];
-  for (let t = 0; t < 1800; t += t === 900 ? 24 : 6) starts.push(t);
-  const run = (windowEnd) => {
-    const d = createDetector({ sensitivity: 70 });
-    const spikes = [];
-    for (let i = 0; i < starts.length; i++) {
-      const seg = { t0: starts[i] };
-      const next = i + 1 < starts.length ? { t0: starts[i + 1] } : undefined;
-      const sp = d.push({ t: seg.t0 + 3, chat: 0, chatters: uniq(seg.t0, windowEnd(seg, next)), lufs: -20 + rnd() });
-      if (sp) spikes.push(sp);
-    }
-    return spikes;
-  };
-  const unclamped = run((seg, next) => (next ? next.t0 : seg.t0 + 6));
-  assert.ok(unclamped.some((sp) => sp.peakAt === 903), "the old window (up to the next start) fires on the hole");
-  assert.deepEqual(run(chatWindowEnd), [], "the clamped window does not");
 });
 
 test("concatList escapes single quotes and ends each line", () => {

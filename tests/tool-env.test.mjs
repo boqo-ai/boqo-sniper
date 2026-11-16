@@ -11,7 +11,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { durationOf } from "../lib/moment.mjs";
-import { measureLoudness } from "../lib/loudness.mjs";
+import { measureMomentary } from "../lib/loudness.mjs";
 import { toolEnv } from "../engine/env.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,7 +57,7 @@ test("every sniper file that starts a process runs it with toolEnv", () => {
   assert.deepEqual(spawners.sort(), ["lib/loudness.mjs", "lib/moment.mjs", "lib/session.mjs", "tools/moment.mjs", "tools/watch.mjs"]);
 });
 
-test("durationOf and measureLoudness run ffprobe and ffmpeg with the env they are given", async () => {
+test("durationOf and measureMomentary run ffprobe and ffmpeg with the env they are given", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-env-"));
   try {
     const wav = path.join(dir, "tone.wav");
@@ -69,10 +69,10 @@ test("durationOf and measureLoudness run ffprobe and ffmpeg with the env they ar
     // A PATH with no tools in it: both fail as a missing tool, so they used this env and not the parent's.
     const bare = { PATH: path.join(dir, "no-tools-here") };
     assert.throws(() => durationOf(wav, bare), /ffprobe could not run: ENOENT/);
-    assert.equal(await measureLoudness(wav, { env: bare }), null);
+    assert.deepEqual(await measureMomentary(wav, { env: bare }), []);
     // The default env (toolEnv) finds them.
     assert.ok(Math.abs(durationOf(wav) - 2) < 0.1);
-    assert.equal(typeof (await measureLoudness(wav)), "number");
+    assert.ok((await measureMomentary(wav)).length >= 19, "about ten readings a second");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

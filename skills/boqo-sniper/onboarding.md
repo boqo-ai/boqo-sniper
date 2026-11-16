@@ -116,8 +116,7 @@ post automatically, up to N a day, to the accounts they name. Without them, writ
 sensitivity.
 
 **The sensitivity:** in the same message, how many moments to catch, from 30 to 95. 70, the default, suits most
-streams; higher catches more moments (and from 70 up a loud moment with a calm chat counts too), lower only the
-biggest. No answer is 70.
+streams; higher catches more moments, lower only the biggest. No answer is 70.
 
 `<home>/boqo-sniper/config.json`:
 - `{"posting": "ask", "sensitivity": 70}`, the default;

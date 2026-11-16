@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The live watcher: record a Twitch stream into a 6-minute ring buffer, read
-// its chat, measure its loudness, and cut a moment folder on every spike.
+// its chat, measure its loudness, and cut a moment folder on every moment the
+// hosted detector finds (lib/boqo/moments.mjs, fed 1 s ticks by lib/ticks.mjs).
 //
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
 //
@@ -15,19 +16,29 @@
 // fails after its session folder exists also leaves status.json at
 // {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
-// Timeline: wall-clock epoch seconds, for chat, buckets, peakAt and every
-// segment. A segment's start is read from its own name (ffmpeg's strftime
-// segment names, run with TZ=UTC0 so they are UTC); the file's mtime overrules
-// a name more than a minute away from it, which is what a build that ignores
-// TZ would produce.
+// Timeline: wall-clock epoch seconds, for chat, loudness, peakAt and every
+// segment (the detector's ticks are the same clock in milliseconds). A
+// segment's start is read from its own name (ffmpeg's strftime segment names,
+// run with TZ=UTC0 so they are UTC); the file's mtime overrules a name more
+// than a minute away from it, which is what a build that ignores TZ would
+// produce.
+//
+// The detector, as hosted's session runs it: a new one for each capture
+// phase; every complete second, the raw chat messages that arrived in it, its
+// loudest momentary reading (the capture's ebur128 line), and whether the chat
+// socket was open for all of it. A second it was not counts no chat and stays
+// out of the chat baseline.
 //
 // Replay (tests, CI): --replay reads pre-made .ts segments in order, 6 s
 // apart, or as far apart as their names say when every one is named like a
 // buffer segment (seg_<UTC stamp>.ts), so a test can leave a hole; and
 // --chat lines {"t": <seconds offset>, "user", "text", "emotes"} on a simulated
-// clock that jumps instead of waiting (BOQO_SNIPER_REPLAY_SPEED=<n> makes it
-// n simulated seconds per real second). When the segments end, offline polling
-// is stubbed: every poll says offline.
+// clock that jumps a second at a time instead of waiting
+// (BOQO_SNIPER_REPLAY_SPEED=<n> makes it n simulated seconds per real second).
+// A chat line {"t", "chatState": "open" | "connecting"} is the socket opening or
+// dropping at t; a replay's chat starts open. Each segment's loudness is read
+// from the segment itself (measureMomentary), at its start plus the reading's t.
+// When the segments end, offline polling is stubbed: every poll says offline.
 //
 // Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
 // 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 360),
@@ -48,7 +59,9 @@ import { spawn } from "node:child_process";
 import { toolEnv } from "../engine/env.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDetector } from "../lib/detector.mjs";
+import { createMomentDetector } from "../lib/boqo/moments.mjs";
+import { signalLine } from "../lib/boqo/signal-line.mjs";
+import { createTickFeed } from "../lib/ticks.mjs";
 import { connectChat } from "../lib/twitch-chat.mjs";
 import {
   cleanupSession,
@@ -66,7 +79,7 @@ import {
   POST_ROLL_SEC,
   PRUNE_MARGIN_SEC,
   SEGMENT_SEC,
-  chatWindowEnd,
+  WINDOW_SEC,
   concatArgs,
   MAX_QUEUE,
   MIN_FREE_BYTES,
@@ -77,7 +90,7 @@ import {
   pruneBefore,
   segmentName,
 } from "../lib/buffer.mjs";
-import { createSecondMax, lineReader, measureLoudness, parseLoudnessLine } from "../lib/loudness.mjs";
+import { lineReader, measureMomentary, parseLoudnessLine } from "../lib/loudness.mjs";
 import {
   captureCommand as sourceCommand,
   captureFfmpegArgs,
@@ -543,15 +556,15 @@ async function main() {
     clock = liveClock();
   }
 
-  const detector = createDetector({ sensitivity: args.sensitivity });
-  const loudness = createSecondMax(); // the loudest momentary reading of each second; the hosted detector (B2) reads it
+  let feed = null; // this capture phase's detector and its 1 s ticks (lib/ticks.mjs)
+  let chatState = replay ? "open" : "connecting"; // the chat socket's, as the client last said
   const segs = []; // { n, t0, name, done, cap }
   let captureNo = 0; // which capture a segment came from: a cut never joins two
   const known = new Set();
   let nextN = 0;
   let totalSegments = 0;
   const chatLog = []; // { t, user, text, emotes }
-  const pending = []; // spikes waiting for their post-roll
+  const pending = []; // moments waiting for their post-roll
   let lastDoneEnd = -Infinity;
   let moments = 0;
   const skipped = owned.skipped; // moments not cut: { queue, disk }
@@ -650,25 +663,46 @@ async function main() {
     segs.sort((a, b) => a.t0 - b.t0);
   }
 
-  function chatWindow(from, to) {
-    const users = new Set();
-    let count = 0;
-    for (const c of chatLog) {
-      if (c.t >= to) break;
-      if (c.t < from) continue;
-      count++;
-      users.add(c.user);
-    }
-    return { count, chatters: users.size };
+  // ---- the detector ----
+
+  /** A new detector and tick feed for a capture phase, as hosted builds one per phase. */
+  function startFeed() {
+    feed = createTickFeed({
+      detector: createMomentDetector({ windowSec: WINDOW_SEC, sensitivity: args.sensitivity }),
+      nowMs: clock.now() * 1000,
+      chatOpen: chatState === "open",
+    });
   }
 
-  async function finishSegment(seg, next) {
-    const lufs = await measureLoudness(seg.name, { cwd: bufDir });
-    const { count, chatters } = chatWindow(seg.t0, chatWindowEnd(seg, next));
+  /** Feed every complete second since the last drain; each candidate waits for its post-roll. */
+  function drainFeed() {
+    if (!feed) return;
+    for (const c of feed.drain(clock.now() * 1000)) {
+      pending.push({
+        peakAt: c.peakAt / 1000,
+        score: c.score,
+        signal: c.signal,
+        title: c.title,
+        signalLine: signalLine(c.detail, c.signal),
+        detail: c.detail,
+      });
+    }
+  }
+
+  function onChat(m) {
+    const t = clock.now();
+    chatLog.push({ t, user: m.user, text: m.text, emotes: m.emotes });
+    feed?.chat(t * 1000, m.text);
+  }
+
+  function onChatState(state, t = clock.now()) {
+    chatState = state;
+    feed?.chatState(state, t * 1000);
+  }
+
+  function finishSegment(seg) {
     seg.done = true;
     lastDoneEnd = Math.max(lastDoneEnd, seg.t0 + SEGMENT_SEC);
-    const spike = detector.push({ t: seg.t0 + SEGMENT_SEC / 2, chat: count, chatters, lufs });
-    if (spike) pending.push(spike);
   }
 
   async function cut(spike) {
@@ -719,9 +753,12 @@ async function main() {
       await writeJsonAtomic(path.join(momentDir, "meta.json"), {
         peakAt: spike.peakAt,
         score: spike.score,
-        reason: spike.reason,
-        chatZ: spike.chatZ,
-        audioZ: spike.audioZ,
+        signal: spike.signal,
+        // v0.1's name for `signal`, which the moment docs (judge.md) still read until the moment flow is rewritten
+        reason: spike.signal,
+        title: spike.title,
+        signalLine: spike.signalLine,
+        detail: spike.detail,
         channel,
         peakIso: iso(spike.peakAt),
         peakOffsetSec: plan.peakOffsetSec,
@@ -746,16 +783,16 @@ async function main() {
     for (let i = segs.length - 1; i >= 0; i--) if (gone.has(segs[i].n)) segs.splice(i, 1);
   }
 
-  /** One pass: finish segments, cut what is ready, prune, report. `ended`: nothing more will arrive. */
+  /** One pass: finish segments, feed the detector, cut what is ready, prune, report. `ended`: nothing more will arrive. */
   async function tick(ended) {
     await scanBuffer();
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i];
       if (seg.done) continue;
-      const next = segs[i + 1];
-      if (!next && !ended) break; // the newest one is still being written
-      await finishSegment(seg, next);
+      if (!segs[i + 1] && !ended) break; // the newest one is still being written
+      finishSegment(seg);
     }
+    drainFeed();
     const flush = ended || stopRequested;
     for (let i = 0; i < pending.length; ) {
       const spike = pending[i];
@@ -765,7 +802,6 @@ async function main() {
       } else i++;
     }
     await prune();
-    loudness.dropBefore(Math.floor(clock.now()) - PRUNE_MARGIN_SEC);
     const horizonT = clock.now() - horizonSec - PRUNE_MARGIN_SEC;
     while (chatLog.length && chatLog[0].t < horizonT) chatLog.shift();
     await writeStatus();
@@ -777,7 +813,8 @@ async function main() {
     const before = totalSegments;
     // every segment of the last capture was found by the tick after it ended
     captureNo++;
-    capture = startCapture(tool, channel, bufDir, (momentary) => loudness.add(clock.now(), momentary));
+    startFeed();
+    capture = startCapture(tool, channel, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary));
     let over = false;
     capture.closed.then(() => (over = true));
     // A source blocked on a dead connection neither exits nor writes: with no
@@ -804,24 +841,43 @@ async function main() {
   }
 
   async function captureReplay() {
+    startFeed();
     let ci = 0;
+    // every chat line before `before`, stamped with its own time as a live one is with its arrival
     const feedChat = (before) => {
       while (ci < replayChat.length && replayBase + replayChat[ci].t < before) {
         const c = replayChat[ci++];
-        chatLog.push({ t: replayBase + c.t, user: String(c.user), text: String(c.text ?? ""), emotes: Number(c.emotes) || 0 });
+        const t = replayBase + c.t;
+        if (typeof c.chatState === "string") {
+          onChatState(c.chatState, t);
+          continue;
+        }
+        const text = String(c.text ?? "");
+        chatLog.push({ t, user: String(c.user), text, emotes: Number(c.emotes) || 0 });
+        feed?.chat(t * 1000, text);
+      }
+    };
+    // the clock moves a second at a time, and every second the detector is fed, as a live capture's loop does
+    const replayUntil = async (t) => {
+      while (clock.now() < t && !(await checkStop())) {
+        await clock.sleep(Math.min(1, t - clock.now()));
+        feedChat(clock.now());
+        drainFeed();
       }
     };
     for (let i = 0; i < replayFiles.length; i++) {
       const at = replayBase + replayOffsets[i];
-      if (at > clock.now()) await nap(at - clock.now());
+      await replayUntil(at);
       if (await checkStop()) return;
       feedChat(at);
-      await fs.copyFile(path.join(args.replay, replayFiles[i]), path.join(bufDir, segmentName(at)));
+      const seg = path.join(bufDir, segmentName(at));
+      await fs.copyFile(path.join(args.replay, replayFiles[i]), seg);
+      for (const r of await measureMomentary(seg)) feed.loudness((at + r.t) * 1000, r.momentary);
       await tick(false);
       setState("live");
     }
     const endAt = replayBase + replayOffsets.at(-1) + SEGMENT_SEC;
-    if (endAt > clock.now()) await nap(endAt - clock.now());
+    await replayUntil(endAt);
     feedChat(endAt);
   }
 
@@ -831,7 +887,7 @@ async function main() {
   if (replay) {
     // chat comes from the file
   } else {
-    chat = connectChat(channel, (m) => chatLog.push({ t: clock.now(), user: m.user, text: m.text, emotes: m.emotes }));
+    chat = connectChat(channel, onChat, { onState: (state) => onChatState(state) });
   }
 
   let exitError = null;
@@ -844,6 +900,7 @@ async function main() {
       await (replay ? captureReplay() : captureLive());
       if (await checkStop()) break;
       await tick(true); // the capture is over: its last segment is whole now
+      feed = null; // the next capture phase starts a new detector
       if (totalSegments > before) {
         offlinePolls = 0;
         failedCaptures = 0;

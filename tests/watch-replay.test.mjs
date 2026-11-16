@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { stamp } from "../lib/session.mjs";
 import { segmentName } from "../lib/buffer.mjs";
 import { toolEnv } from "../engine/env.mjs";
+import { EwmaStat } from "../lib/boqo/moments.mjs";
 
 const WATCH = fileURLToPath(new URL("../tools/watch.mjs", import.meta.url));
 const STOP = fileURLToPath(new URL("../tools/stop.mjs", import.meta.url));
@@ -131,11 +132,15 @@ test("replay: one burst makes one ~300 s moment, then 10 offline polls end the r
     assert.deepEqual((await fs.readdir(dir)).sort(), ["chat.json", "meta.json", "video.mp4"]);
 
     const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
-    assert.equal(meta.reason === "chat" || meta.reason === "both", true);
+    // the hosted detector's candidate: a chat moment, titled by its repeated message
+    assert.equal(meta.signal, "chat");
+    assert.equal(meta.reason, "chat", "v0.1's name for the signal stays for the moment docs");
     assert.ok(meta.score >= 60 && meta.score <= 100, `score ${meta.score}`);
-    assert.equal(typeof meta.chatZ, "number");
-    assert.ok("audioZ" in meta);
-    assert.ok(Number.isFinite(meta.peakAt));
+    assert.equal(meta.title, 'chat spike — "POGGERS" ×35');
+    assert.match(meta.signalLine, /^POGGERS ×35 · \d+\/s$/);
+    assert.ok(meta.detail.chatPerSec >= 2 && Number.isFinite(meta.detail.chatBaseline));
+    assert.equal(typeof meta.detail.loudness, "number", "the replay's loudness is read from its segments");
+    assert.ok(Number.isInteger(meta.peakAt), "a peak is a wall-clock second");
     // the burst is the segment at 300-306 s of a replay whose clock starts at launch
     assert.ok(Math.abs(meta.peakAt - (t0 / 1000 + 303)) < 20, `peakAt ${meta.peakAt}`);
     assert.equal(momentNames[0], stamp(new Date(meta.peakAt * 1000)));
@@ -194,13 +199,72 @@ test("replay: a burst after a hole is cut from after the hole, with peak and cha
     const dir = path.join(session, "moments", names[0]);
     const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
     assert.equal(meta.peakOffsetSec, meta.peakAt - meta.startAt);
-    assert.equal(meta.peakOffsetSec, 63, "the cut starts on the segment at 324, the peak segment is 384-390");
+    assert.equal(meta.peakOffsetSec, 64, "the cut starts on the segment at 324; the peak is 388, the first second whose 5 s chat window is all burst");
     const dur = durationOf(path.join(dir, "video.mp4"));
     assert.ok(Math.abs(dur - (meta.endAt - meta.startAt)) < 2, `video ${dur} s, wall clock ${meta.endAt - meta.startAt} s`);
     assert.ok(dur > 91 && dur < 101, `video is ${dur} s, expected 96 (324 to 420)`);
     const fans = JSON.parse(await fs.readFile(path.join(dir, "chat.json"), "utf8")).filter((c) => c.user.startsWith("fan"));
     assert.equal(fans.length, 35);
     assert.ok(fans.every((c) => c.t >= 60 && c.t < 66), "the burst sits 60-66 s into the video, as it does on the wall clock");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+/** One message a second from 7 regulars (none in `silent` [from, to)), 35 fans in the 6 s from each burst's `at` saying its `text`, and the socket `states`. */
+async function makeChatWith(file, seconds, { bursts = [], silent = null, states = [] }) {
+  const lines = [];
+  for (let t = 0; t < seconds; t++) {
+    if (silent && t >= silent[0] && t < silent[1]) continue;
+    lines.push({ t, user: `reg${t % 7}`, text: "hello", emotes: 0 });
+  }
+  for (const { at, text } of bursts) for (let i = 0; i < 35; i++) lines.push({ t: at + i * (6 / 35), user: `fan${at}-${i}`, text, emotes: 1 });
+  lines.push(...states);
+  lines.sort((a, b) => a.t - b.t);
+  await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+}
+
+async function momentMetas(home, channel) {
+  const session = await onlySession(home, channel);
+  const names = (await fs.readdir(path.join(session, "moments"))).sort();
+  return Promise.all(names.map(async (n) => JSON.parse(await fs.readFile(path.join(session, "moments", n, "meta.json"), "utf8"))));
+}
+
+test("replay: while the chat socket is closed nothing it carries counts, and the baseline stays the open chat's", { timeout: 240000 }, async () => {
+  const work = await tmp("closed");
+  try {
+    await makeSegments(path.join(work, "segs"), 80);
+    // the socket is down for 100-200 (a silent chat) and 280-330 (with the EARLY burst at 300 in it); LATE at 400 is open
+    const bursts = [{ at: 300, text: "EARLY" }, { at: 400, text: "LATE" }];
+    const states = [
+      { t: 100, chatState: "connecting" },
+      { t: 200, chatState: "open" },
+      { t: 280, chatState: "connecting" },
+      { t: 330, chatState: "open" },
+    ];
+    await makeChatWith(path.join(work, "closed.jsonl"), 480, { bursts, silent: [100, 200], states });
+    await makeChatWith(path.join(work, "open.jsonl"), 480, { bursts, silent: [100, 200] }); // the control: the same chat, never closed
+    const watch = async (name, chatFile) => {
+      const home = path.join(work, name);
+      const r = await run(WATCH, [name, "--replay", path.join(work, "segs"), "--chat", path.join(work, chatFile)], {
+        BOQO_HOME: home,
+        BOQO_SNIPER_POLL_MS: "100",
+      });
+      assert.equal(r.code, 0, r.stderr);
+      return momentMetas(home, name);
+    };
+    const [closed, open] = await Promise.all([watch("closed", "closed.jsonl"), watch("open", "open.jsonl")]);
+
+    assert.deepEqual(open.map((m) => m.title), ['chat spike — "EARLY" ×35', 'chat spike — "LATE" ×35'], "the control hears both bursts");
+    assert.deepEqual(closed.map((m) => m.title), ['chat spike — "LATE" ×35'], "a burst while the socket is closed is no moment");
+    // Every open second carried one message, so the baseline LATE is judged on is the open chat's alone: 249
+    // open seconds of 1 a second (1-99, 200-279, 330-399), then the four seconds of the burst's own rise before
+    // its peak at 404 (five-second means 2.2, 3.4, 4.6, 5.8). The control, which feeds the same seconds as open
+    // ones (the silent hundred pull its baseline down, the EARLY burst up), does not read that.
+    const oracle = new EwmaStat(1 - Math.exp(-1 / 300));
+    for (const x of [...Array(249).fill(1), 2.2, 3.4, 4.6, 5.8]) oracle.update(x);
+    assert.ok(Math.abs(closed[0].detail.chatBaseline - oracle.baseline()) < 0.01, `baseline ${closed[0].detail.chatBaseline}, open chat alone ${oracle.baseline()}`);
+    assert.ok(Math.abs(open[1].detail.chatBaseline - oracle.baseline()) > 0.05, `control baseline ${open[1].detail.chatBaseline}`);
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
