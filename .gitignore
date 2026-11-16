@@ -4,3 +4,4 @@ out/
 *.ts
 !tests/fixtures/**
 !engine/fixtures/**
+!scripts/parity/cases/*.ts

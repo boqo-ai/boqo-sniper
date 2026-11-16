@@ -10,6 +10,7 @@ import {
   captureCommand,
   captureFfmpegArgs,
   chooseCapture,
+  isSegmentOpening,
   readConfig,
   stallSecFor,
 } from "../lib/capture.mjs";
@@ -142,4 +143,13 @@ test("the capture's ffmpeg, fed a 13 s stream on stdin, writes 6 s segments and 
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("isSegmentOpening: only the routine segment lines, so a dying capture's real error stays in the failure tail", () => {
+  assert.equal(isSegmentOpening("[segment @ 0x5e8ae1db7180] Opening 'seg_20261116054528.ts' for writing"), true);
+  assert.equal(isSegmentOpening("[segment @ 0x1] Opening 'seg_20261116054534.ts' for writing\r"), true);
+  assert.equal(isSegmentOpening("[segment @ 0x1] Failed to open segment 'seg_20261116054540.ts'"), false);
+  assert.equal(isSegmentOpening("[out#0/segment @ 0x1] Error opening output seg_x.ts: Permission denied"), false);
+  assert.equal(isSegmentOpening("[vist#0:0/h264 @ 0x1] Error submitting packet to decoder"), false);
+  assert.equal(isSegmentOpening("pipe:0: Invalid data found when processing input"), false);
 });

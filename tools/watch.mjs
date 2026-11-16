@@ -82,6 +82,7 @@ import {
   captureCommand as sourceCommand,
   captureFfmpegArgs,
   chooseCapture,
+  isSegmentOpening,
   readConfig,
   stallSecFor,
 } from "../lib/capture.mjs";
@@ -375,13 +376,13 @@ function startCapture(tool, channel, bufDir, onLoudness) {
   });
   src.stderr.on("data", note(cmd));
   const noteFfmpeg = note("ffmpeg");
-  // a loudness line is a reading, not a diagnostic: it never reaches the tail the failure message quotes
+  // a loudness line is a reading and a segment-opening line is routine: neither reaches the tail the failure message quotes
   ff.stderr.on(
     "data",
     lineReader((line) => {
       const parsed = parseLoudnessLine(line);
       if (parsed) onLoudness(parsed.momentary);
-      else if (line.trim() !== "") noteFfmpeg(line);
+      else if (line.trim() !== "" && !isSegmentOpening(line)) noteFfmpeg(line);
     }),
   );
   ff.stdin.on("error", () => {});
