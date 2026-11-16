@@ -45,7 +45,19 @@ test("both captures stop at 1080p; streamlink keeps 1080p60 and skips ads", () =
   assert.ok(s.args.includes("--twitch-disable-ads"));
   // streamlink weighs 1080p60 as 1140, so ">1080p" would drop it; ">1080p60" drops only what is above it
   assert.equal(s.args[s.args.indexOf("--stream-sorting-excludes") + 1], ">1080p60");
-  assert.deepEqual(s.args.slice(-2), ["twitch.tv/chan", "best"]);
+  assert.deepEqual(s.args.slice(-2), ["https://www.twitch.tv/chan", "best"]);
+});
+
+test("a Kick channel is captured from its channel URL; Twitch's ad skipping is left off for it", () => {
+  const k = { platform: "kick", channel: "x-q_c" };
+  const y = captureCommand("yt-dlp", k);
+  assert.equal(y.args.at(-1), "https://kick.com/x-q_c");
+  assert.equal(captureCommand("yt-dlp", "kick:x-q_c").args.at(-1), "https://kick.com/x-q_c", "the person's own input too");
+  const s = captureCommand("streamlink", k);
+  assert.ok(!s.args.includes("--twitch-disable-ads"));
+  assert.deepEqual(s.args.slice(-2), ["https://kick.com/x-q_c", "best"]);
+  assert.equal(s.args[s.args.indexOf("--stream-sorting-excludes") + 1], ">1080p60");
+  assert.throws(() => captureCommand("yt-dlp", "kick.com/xqc/videos"), /bad channel/);
 });
 
 test("a stall is boqo's 45 s for yt-dlp and 180 s for streamlink, which goes quiet through an ad break", () => {

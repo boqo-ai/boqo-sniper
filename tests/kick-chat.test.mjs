@@ -1,6 +1,6 @@
 // Kick chat: the ported pure parts against goldens boqo's own TypeScript wrote at the pin, then the client
 // (lib/chat.mjs startChat over lib/boqo/kick-chat.mjs) on a fake fetch and a fake WebSocket. No network.
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -37,6 +37,17 @@ test("parse-pusher-frame: the ported frame reader matches boqo's on messages, pi
 });
 
 // ---- the client on fakes ----
+
+// a chat that is still open when a test fails would hold its idle timer, and the whole file, open: close them all
+const started = [];
+afterEach(() => {
+  for (const chat of started.splice(0)) chat.close();
+});
+const start = async (options) => {
+  const chat = await startChat(options);
+  started.push(chat);
+  return chat;
+};
 
 const CHANNEL = { chatroom: { id: 668 }, livestream: { viewer_count: 12400 } };
 
@@ -84,7 +95,7 @@ test("a 403 from the channel API rejects startChat with KickRefused(403), and no
   const f = fakeFetch(() => refused(403));
   const s = fakeSockets();
   await assert.rejects(
-    startChat({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS }),
+    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS }),
     (err) => err instanceof KickRefused && err.status === 403 && /kick refused: 403/.test(err.message),
   );
   assert.equal(f.calls.length, 1);
@@ -98,7 +109,7 @@ test("the chat opens on the subscription's confirmation, counts messages, and an
   const s = fakeSockets();
   const opens = [];
   const got = [];
-  const chat = await startChat({
+  const chat = await start({
     platform: "kick", slug: "XQC", onMessage: (m) => got.push(m), onOpenChange: (o) => opens.push(o), fetch: f.fetch, WebSocket: s.FakeWS,
   });
   assert.equal(f.calls[0].url, "https://kick.com/api/v2/channels/xqc", "the slug is lowercased");
@@ -121,7 +132,7 @@ test("a socket that closes mid-session: onOpenChange(false), a reconnect after t
   const f = fakeFetch(() => ok(CHANNEL));
   const s = fakeSockets();
   const opens = [];
-  const chat = await startChat({
+  const chat = await start({
     platform: "kick", slug: "xqc", onMessage() {}, onOpenChange: (o) => opens.push(o), fetch: f.fetch, WebSocket: s.FakeWS, backoffMs: [40],
   });
   s.sockets[0].open();
@@ -149,7 +160,7 @@ test("a silent link is probed with a ping, then dropped and reported not open", 
   const f = fakeFetch(() => ok(CHANNEL));
   const s = fakeSockets();
   const opens = [];
-  const chat = await startChat({
+  const chat = await start({
     platform: "kick", slug: "xqc", onMessage() {}, onOpenChange: (o) => opens.push(o), fetch: f.fetch, WebSocket: s.FakeWS,
     backoffMs: [1000], idleTimeoutMs: 20, pingGraceMs: 20,
   });
@@ -167,7 +178,7 @@ test("a network error on the first lookup is not a refusal: startChat resolves a
     return ok(CHANNEL);
   });
   const s = fakeSockets();
-  const chat = await startChat({
+  const chat = await start({
     platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS, backoffMs: [5],
   });
   await until(() => s.sockets.length === 1, "the socket after the second lookup");
@@ -179,7 +190,7 @@ test("Twitch: the same onOpenChange, true on the join's confirmation and false o
   const s = fakeSockets();
   const opens = [];
   const got = [];
-  const chat = await startChat({
+  const chat = await start({
     platform: "twitch", slug: "xqc", onMessage: (m) => got.push(m), onOpenChange: (o) => opens.push(o), fetch: async () => assert.fail("no fetch for Twitch"), WebSocket: s.FakeWS,
   });
   assert.equal(s.sockets[0].url, "wss://irc-ws.chat.twitch.tv:443");

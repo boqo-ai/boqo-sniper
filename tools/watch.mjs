@@ -1,18 +1,22 @@
 #!/usr/bin/env node
-// The live watcher: record a Twitch stream into a 6-minute ring buffer, read
+// The live watcher: record a Twitch or Kick stream into a 6-minute ring buffer, read
 // its chat, measure its loudness, and cut a moment folder on every moment the
 // hosted detector finds (lib/boqo/moments.mjs, fed 1 s ticks by lib/ticks.mjs).
 //
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
 //
+// <channel>: a Twitch login, twitch.tv/<login>, kick.com/<slug> or kick:<slug>
+// (boqo's parser, lib/boqo/stream.mjs; a bare name is Twitch).
+//
 // Runs in the foreground; the agent starts it in the background and reads
-// what it writes: $BOQO_HOME/boqo-sniper/watch/<channel>/<YYYYMMDD-HHMMSS>/
+// what it writes: $BOQO_HOME/boqo-sniper/watch/<platform>-<slug>/<YYYYMMDD-HHMMSS>/
 //   buf/seg_<UTC stamp>.ts   6 s segments, the newest 360 s (a 300 s window and 60 s)
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
 //   status.json  watch.pid   `stop` is written by stop.mjs
 //
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
-// offline), or {"error": "..."} and exit 1. Stderr is for humans. A run that
+// offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} and exit 2 when Kick's channel
+// API answers anything but 200 (its chat cannot start; Kick sits behind Cloudflare). Stderr is for humans. A run that
 // fails after its session folder exists also leaves status.json at
 // {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
@@ -62,7 +66,8 @@ import path from "node:path";
 import { createMomentDetector } from "../lib/boqo/moments.mjs";
 import { signalLine } from "../lib/boqo/signal-line.mjs";
 import { createTickFeed } from "../lib/ticks.mjs";
-import { connectChat } from "../lib/twitch-chat.mjs";
+import { KickRefused, startChat } from "../lib/chat.mjs";
+import { streamChannelLabel, streamUrl } from "../lib/boqo/stream.mjs";
 import {
   cleanupSession,
   countUnclaimed,
@@ -73,6 +78,7 @@ import {
   sweepAll,
   watcherPid,
   writeJsonAtomic,
+  resolveChannel,
 } from "../lib/session.mjs";
 import {
   HORIZON_SEC,
@@ -106,9 +112,9 @@ export const MAX_FAILED_CAPTURES = 10;
 /** A source still running this long after SIGTERM gets SIGKILL. */
 const KILL_GRACE_MS = 5000;
 
-function fail(message) {
+function fail(message, code = 1) {
   console.log(JSON.stringify({ error: message }));
-  process.exit(1);
+  process.exit(code);
 }
 
 /** The session this process owns (its watch.pid is ours), once it has one. */
@@ -120,12 +126,13 @@ let capture = null;
  * Fail a run whose session exists: status.json says failed and why, the
  * buffer and the pid file go, then {"error"} and exit 1.
  */
-async function failSession(message) {
+async function failSession(message, code = 1) {
   if (owned) {
     const now = new Date().toISOString();
     try {
       await writeJsonAtomic(path.join(owned.dir, "status.json"), {
         state: "failed",
+        platform: owned.platform,
         channel: owned.channel,
         since: now,
         segments: 0,
@@ -138,7 +145,7 @@ async function failSession(message) {
     } catch {}
     await cleanupSession(owned.dir).catch(() => {});
   }
-  fail(message);
+  fail(message, code);
 }
 
 // A bug must not leave a "live" status nobody updates: say failed and why, and exit 1.
@@ -268,8 +275,8 @@ async function unlinkRetry(file) {
 }
 
 /** The channel's current session is still being watched by a live process. */
-async function runningWatcher(channel) {
-  const dir = await currentSession(channel);
+async function runningWatcher(target) {
+  const dir = await currentSession(target);
   if (!dir) return null;
   const pid = await watcherPid(dir);
   return pid === null ? null : { dir, pid };
@@ -282,12 +289,12 @@ async function runningWatcher(channel) {
  * the stream to stdout; ffmpeg copies it into 6 s segments named by the UTC
  * second they open. BOQO_SNIPER_SOURCE (a JSON argv) stands in for them in tests.
  */
-function captureCommand(tool, channel) {
+function captureCommand(tool, target) {
   if (tool === "test-source") {
     const [cmd, ...args] = JSON.parse(process.env.BOQO_SNIPER_SOURCE);
     return { cmd, args };
   }
-  return sourceCommand(tool, channel);
+  return sourceCommand(tool, target);
 }
 
 /**
@@ -368,8 +375,8 @@ function signalTree(child) {
  * Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline.
  * `onLoudness(momentary)` gets each of the ffmpeg's ebur128 lines (one per 100 ms) as it arrives.
  */
-function startCapture(tool, channel, bufDir, onLoudness) {
-  const { cmd, args } = captureCommand(tool, channel);
+function startCapture(tool, target, bufDir, onLoudness) {
+  const { cmd, args } = captureCommand(tool, target);
   const tail = [];
   const note = (who) => (d) => {
     tail.push(`${who}: ${String(d).trim()}`);
@@ -432,17 +439,17 @@ function startCapture(tool, channel, bufDir, onLoudness) {
   };
 }
 
-async function isLive(tool, channel) {
+async function isLive(tool, target) {
   // tests: BOQO_SNIPER_TEST_LIVE=1 makes the test source's channel say live
   if (tool === "test-source") return process.env.BOQO_SNIPER_TEST_LIVE === "1";
   if (await hasTool("yt-dlp")) {
-    const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", `https://www.twitch.tv/${channel}`], {
+    const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", streamUrl(target)], {
       timeoutMs: 45000,
     });
     return r.code === 0 && r.stdout.trim().split(/\s+/).pop() === "True";
   }
   if (tool === "streamlink") {
-    const r = await runOnce("streamlink", ["--json", `twitch.tv/${channel}`], { timeoutMs: 45000 });
+    const r = await runOnce("streamlink", ["--json", streamUrl(target)], { timeoutMs: 45000 });
     try {
       return Object.keys(JSON.parse(r.stdout).streams ?? {}).length > 0;
     } catch {
@@ -461,7 +468,14 @@ async function main() {
   } catch (err) {
     fail(err.message);
   }
-  const channel = args.channel.toLowerCase();
+  let target;
+  try {
+    target = resolveChannel(args.channel);
+  } catch (err) {
+    fail(err.message);
+  }
+  const { platform, channel } = target;
+  const label = streamChannelLabel(target);
   const replay = args.replay !== null;
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
   const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
@@ -492,11 +506,11 @@ async function main() {
 
   let running = null;
   try {
-    running = await runningWatcher(channel);
+    running = await runningWatcher(target);
   } catch (err) {
     fail(err.message);
   }
-  if (running) fail(`already watching ${channel} (pid ${running.pid}, ${running.dir})`);
+  if (running) fail(`already watching ${label} (pid ${running.pid}, ${running.dir})`);
 
   // A watcher that was hard-killed leaves its buffer, pid and "live" status
   // behind, on this channel or any other.
@@ -505,16 +519,16 @@ async function main() {
   } catch (err) {
     console.error(`sweep of old sessions failed: ${err.message}`);
   }
-  const dir = await newSession(channel, new Date());
+  const dir = await newSession(target, new Date());
   const bufDir = path.join(dir, "buf");
   const momentsDir = path.join(dir, "moments");
   const stopFile = path.join(dir, "stop");
   try {
     await fs.writeFile(path.join(dir, "watch.pid"), String(process.pid), { flag: "wx" });
   } catch (err) {
-    fail(err.code === "EEXIST" ? `already watching ${channel} (${dir})` : err.message);
+    fail(err.code === "EEXIST" ? `already watching ${label} (${dir})` : err.message);
   }
-  owned = { dir, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
+  owned = { dir, platform, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
   // tests: BOQO_SNIPER_TEST_CRASH=throw|reject crashes the run 300 ms after its session exists
   const testCrash = process.env.BOQO_SNIPER_TEST_CRASH;
   if (testCrash === "throw" || testCrash === "reject") {
@@ -591,6 +605,7 @@ async function main() {
       path.join(dir, "status.json"),
       {
         state,
+        platform,
         channel,
         since,
         segments: segs.length,
@@ -759,6 +774,7 @@ async function main() {
         title: spike.title,
         signalLine: spike.signalLine,
         detail: spike.detail,
+        platform,
         channel,
         peakIso: iso(spike.peakAt),
         peakOffsetSec: plan.peakOffsetSec,
@@ -814,7 +830,7 @@ async function main() {
     // every segment of the last capture was found by the tick after it ended
     captureNo++;
     startFeed();
-    capture = startCapture(tool, channel, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary));
+    capture = startCapture(tool, target, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary));
     let over = false;
     capture.closed.then(() => (over = true));
     // A source blocked on a dead connection neither exits nor writes: with no
@@ -887,7 +903,25 @@ async function main() {
   if (replay) {
     // chat comes from the file
   } else {
-    chat = connectChat(channel, onChat, { onState: (state) => onChatState(state) });
+    // tests: BOQO_SNIPER_TEST_KICK_STATUS=<n> makes Kick's channel API answer with that status
+    const testKick = process.env.BOQO_SNIPER_TEST_KICK_STATUS;
+    const fetchImpl = testKick
+      ? async () => ({ status: Number(testKick), ok: Number(testKick) === 200, json: async () => ({ chatroom: { id: 1 } }) })
+      : globalThis.fetch;
+    try {
+      chat = await startChat({
+        platform,
+        slug: channel,
+        onMessage: onChat,
+        onOpenChange: (open) => onChatState(open ? "open" : "connecting"),
+        fetch: fetchImpl,
+      });
+    } catch (err) {
+      // Kick answered the channel lookup with something but 200: no chatroom to join, so no chat for the whole
+      // watch. Say so now, in one line, and stop; the person decides (Kick sits behind Cloudflare).
+      if (err instanceof KickRefused) await failSession(err.message, 2);
+      throw err;
+    }
   }
 
   let exitError = null;
@@ -918,7 +952,7 @@ async function main() {
       while (!live && offlinePolls < MAX_OFFLINE_POLLS) {
         await nap(pollSec);
         if (await checkStop()) break;
-        live = replay ? false : await isLive(tool, channel);
+        live = replay ? false : await isLive(tool, target);
         if (live) offlinePolls = 0;
         else offlinePolls++;
         await writeStatus();
@@ -950,7 +984,7 @@ async function main() {
   await fs.rm(stopFile, { force: true });
 
   if (exitError) fail(failMessage);
-  process.stdout.write(JSON.stringify({ state, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
+  process.stdout.write(JSON.stringify({ state, platform, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
 }
 
 main().catch((err) => failSession(err?.message || String(err)));

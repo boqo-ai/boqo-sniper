@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { stamp } from "../lib/session.mjs";
+import { sessionFolder, stamp } from "../lib/session.mjs";
 import { segmentName } from "../lib/buffer.mjs";
 import { toolEnv } from "../engine/env.mjs";
 import { EwmaStat } from "../lib/boqo/moments.mjs";
@@ -95,7 +95,7 @@ function durationOf(file) {
 }
 
 async function onlySession(home, channel) {
-  const root = path.join(home, "boqo-sniper", "watch", channel);
+  const root = path.join(home, "boqo-sniper", "watch", sessionFolder(channel));
   const names = await fs.readdir(root);
   assert.equal(names.length, 1, `one session folder, got ${names}`);
   return path.join(root, names[0]);
@@ -118,10 +118,11 @@ test("replay: one burst makes one ~300 s moment, then 10 offline polls end the r
 
     const session = await onlySession(home, "chan_one");
     const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
-    assert.deepEqual(Object.keys(status).sort(), ["channel", "chatPerSec", "moments", "segments", "since", "skipped", "state", "updatedAt"]);
+    assert.deepEqual(Object.keys(status).sort(), ["channel", "chatPerSec", "moments", "platform", "segments", "since", "skipped", "state", "updatedAt"]);
     assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
     assert.equal(status.state, "offline");
     assert.equal(status.channel, "chan_one");
+    assert.equal(status.platform, "twitch");
     assert.equal(status.moments, 1);
     await assert.rejects(fs.access(path.join(session, "watch.pid")), "the pid file goes with the process");
 
@@ -300,7 +301,7 @@ test("stop.mjs stops a running watcher; a second watcher on the channel is refus
     const args = ["stopme", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")];
     const watching = run(WATCH, args, env);
 
-    const root = path.join(home, "boqo-sniper", "watch", "stopme");
+    const root = path.join(home, "boqo-sniper", "watch", "twitch-stopme");
     let session = null;
     for (let i = 0; i < 100 && !session; i++) {
       try {
@@ -386,7 +387,7 @@ test("a channel that is offline from the start also ends after 10 offline polls"
 
 /** Wait until the watcher's session folder has its pid file and status; returns the folder. */
 async function waitForSession(home, channel) {
-  const root = path.join(home, "boqo-sniper", "watch", channel);
+  const root = path.join(home, "boqo-sniper", "watch", sessionFolder(channel));
   for (let i = 0; i < 100; i++) {
     try {
       const names = await fs.readdir(root);
@@ -401,9 +402,9 @@ async function waitForSession(home, channel) {
   assert.fail("the watcher never created its session folder");
 }
 
-/** What a failed run must leave: exit 1, one {"error"} line, status "failed" with that error, no pid, and next/status saying so. */
-async function assertFailed(r, session, channel, env, pattern) {
-  assert.equal(r.code, 1, r.stderr);
+/** What a failed run must leave: exit 1 (or `exitCode`), one {"error"} line, status "failed" with that error, no pid, and next/status saying so. */
+async function assertFailed(r, session, channel, env, pattern, exitCode = 1) {
+  assert.equal(r.code, exitCode, r.stderr);
   assert.equal(r.stdout.trim().split("\n").length, 1, "one JSON line on stdout");
   assert.match(r.json.error, pattern);
   const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
@@ -466,6 +467,26 @@ test("a capture that keeps failing while the channel is live ends failed, with w
     const r = await run(WATCH, ["capfail"], env);
     await assertFailed(r, await onlySession(home, "capfail"), "capfail", env, /403: Forbidden/);
     assert.match(r.json.error, /10 times/);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a Kick channel whose API answers 403 stops the start: kick refused: 403, exit 2, status failed, no capture", { timeout: 60000 }, async () => {
+  const work = await tmp("kick403");
+  const home = path.join(work, "home");
+  try {
+    const env = {
+      BOQO_HOME: home,
+      // a source that would record, if the watch got that far: it must not be started
+      BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, "-e", 'require("node:fs").writeFileSync(process.argv[1], "ran")', path.join(work, "capture-ran")]),
+      BOQO_SNIPER_TEST_LIVE: "1",
+      BOQO_SNIPER_TEST_KICK_STATUS: "403",
+    };
+    const r = await run(WATCH, ["kick:x-q_c"], env);
+    await assertFailed(r, await onlySession(home, "kick:x-q_c"), "kick:x-q_c", env, /^kick refused: 403$/, 2);
+    assert.equal(path.basename(path.dirname(await onlySession(home, "kick:x-q_c"))), "kick-x-q_c");
+    await assert.rejects(fs.access(path.join(work, "capture-ran")), "the capture never started");
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }

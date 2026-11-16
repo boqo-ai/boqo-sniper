@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sniperHome, sessionsDir, newSession, currentSession, readStatus } from "../lib/session.mjs";
+import { sniperHome, sessionsDir, newSession, currentSession, readStatus, resolveChannel } from "../lib/session.mjs";
 
 async function withHome(fn) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-session-"));
@@ -26,15 +26,41 @@ test("sniperHome follows BOQO_HOME and falls back to ~/.boqo", async () => {
   });
 });
 
-test("sessionsDir lowercases the channel, lives under watch/, and refuses path tricks", async () => {
+test("sessionsDir is watch/<platform>-<slug>, lowercased, takes every way to name a channel, and refuses path tricks", async () => {
   await withHome((home) => {
-    assert.equal(sessionsDir("ShroudTV"), path.join(home, "boqo-sniper", "watch", "shroudtv"));
+    const watch = path.join(home, "boqo-sniper", "watch");
+    assert.equal(sessionsDir("ShroudTV"), path.join(watch, "twitch-shroudtv"));
+    assert.equal(sessionsDir("twitch.tv/shroudtv"), path.join(watch, "twitch-shroudtv"));
+    assert.equal(sessionsDir({ platform: "twitch", channel: "shroudtv" }), path.join(watch, "twitch-shroudtv"));
+    assert.equal(sessionsDir("kick:xqc"), path.join(watch, "kick-xqc"));
+    assert.equal(sessionsDir("https://kick.com/X-Q_C/"), path.join(watch, "kick-x-q_c"));
+    assert.notEqual(sessionsDir("kick:xqc"), sessionsDir("twitch:xqc"), "the same slug on two platforms is two channels");
     // onboarding's samples/ and the clips/ folder sit beside watch/, so no channel name can land on them
-    assert.equal(path.dirname(sessionsDir("clips")), path.join(home, "boqo-sniper", "watch"));
-    assert.equal(path.dirname(sessionsDir("samples")), path.join(home, "boqo-sniper", "watch"));
-    for (const bad of ["", "../x", "a/b", "a\\b", "a b"]) {
-      assert.throws(() => sessionsDir(bad), /channel/i, bad);
+    assert.equal(path.dirname(sessionsDir("clips")), watch);
+    assert.equal(path.dirname(sessionsDir("samples")), watch);
+    assert.equal(path.dirname(sessionsDir("kick:clips")), watch);
+    for (const bad of ["", "../x", "a/b", "a\\b", "a b", "kick:../x", "kick:a/b", "kick.com/xqc/videos", "kick.com/xqc?clip=clip_1", "x-y", {}, null, 7]) {
+      assert.throws(() => sessionsDir(bad), /channel/i, String(JSON.stringify(bad)));
     }
+  });
+});
+
+test("resolveChannel: a bare name is a Twitch login; links and kick: say the platform", () => {
+  assert.deepEqual(resolveChannel("xqc"), { platform: "twitch", channel: "xqc" });
+  assert.deepEqual(resolveChannel("Twitch:XQC"), { platform: "twitch", channel: "xqc" });
+  assert.deepEqual(resolveChannel("kick:x-q_c"), { platform: "kick", channel: "x-q_c" });
+  assert.deepEqual(resolveChannel({ platform: "Kick", channel: "X-Q_C" }), { platform: "kick", channel: "x-q_c" });
+  assert.throws(() => resolveChannel("x-q_c"), /bad channel/, "a hyphen is not a Twitch login, and a bare name is Twitch");
+});
+
+test("the session folder for kick:x-q_c is created, as watch/kick-x-q_c/<stamp>/ with buf and moments", async () => {
+  await withHome(async (home) => {
+    const dir = await newSession("kick:x-q_c", new Date("2026-11-16T09:08:07Z"));
+    assert.equal(dir, path.join(home, "boqo-sniper", "watch", "kick-x-q_c", "20261116-090807"));
+    for (const sub of ["buf", "moments"]) assert.ok((await fs.stat(path.join(dir, sub))).isDirectory());
+    assert.equal(await currentSession("kick:x-q_c"), dir);
+    assert.equal(await currentSession("kick.com/x-q_c"), dir, "found again from any spelling of the channel");
+    assert.equal(await currentSession("twitch:x_q_c"), null);
   });
 });
 
