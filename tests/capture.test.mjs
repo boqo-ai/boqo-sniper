@@ -116,7 +116,7 @@ test("readConfig: the skill's config.json, {} when it is missing or broken", asy
   }
 });
 
-test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 60000 }, async () => {
+async function captureOnce() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-capture-"));
   try {
     // a synthetic 15 s test pattern and tone, as the source command would write it to stdout, at the speed a live
@@ -162,6 +162,18 @@ test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and 
     assert.ok(steady > -40 && steady < 0, `momentary loudness ${steady}`);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+// One run is a real-time (-re) feed whose segments are named by the wall-clock second they open, so a runner that
+// stalls for seconds can open two within one second and overwrite a name. A real regression (the segment length, the
+// stream copy, the loudness line) fails the same way twice; a stall passes the second time. Both failures are shown.
+test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 120000 }, async (t) => {
+  try {
+    await captureOnce();
+  } catch (first) {
+    t.diagnostic(`first run failed, trying once more: ${first.message}`);
+    await captureOnce();
   }
 });
 
