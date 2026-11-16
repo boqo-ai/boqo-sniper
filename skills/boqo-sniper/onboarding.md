@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ bf31f0c; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ 416d3ce; keep in step -->
 # Onboarding
 
 Runs from INSTALL.md step 6, and from a start that finds no brand kit or no `<home>/boqo-sniper/config.json` (SKILL.md →
@@ -25,9 +25,9 @@ Four questions. Ask the first two in one message.
    BOQO_HOME="<samples>/home" node "$HOME/.boqo-sniper/tools/brand.mjs" save "<samples>/logo.json" --logo "<url>"
    ```
    From then on `<logo>` is the file its reply names in `brand.logo.file`.
-3. **Two colours:** the caption text (usually white) and the accent, the colour of the spoken or stressed word.
-   Open the logo image and offer its strongest colour as the accent, in hex: "#E63946 from your logo, with white
-   text?".
+3. **Two colours:** the caption text (usually white) and the accent, which marks the spoken word in the karaoke and
+   highlight styles. Open the logo image and offer its strongest colour as the accent, in hex: "#E63946 from your
+   logo, with white text?".
 4. **Caption style,** by sight: render the four samples below, show them, and ask which one they want.
 
 **The samples.** The sample kits are saved into a scratch home inside `<samples>`, so nothing real is saved before
@@ -61,7 +61,10 @@ the person chooses.
      "[0:v]scale=360:640[a];[1:v]scale=360:640[b];[2:v]scale=360:640[c];[3:v]scale=360:640[d];[a][b][c][d]hstack=4" \
      -frames:v 1 "<samples>/styles.jpg"
    ```
-   Give the person `<samples>/styles.jpg` first, then the four clips, which show how the words move.
+   Give the person `<samples>/styles.jpg` first, then the four clips, which show how the words move, and say
+   what each does, a line each: karaoke shows 3 or 4 words, the spoken one in the accent; punch, 1 or 2 big uppercase
+   words at a time, all in the text colour (no accent); clean, up to 6 words in the text colour; highlight, 3 or 4
+   words, the spoken one on an accent box.
 
 **The kit.** Once they choose, write `<samples>/brand.json` and save it for real:
 

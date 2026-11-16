@@ -134,22 +134,24 @@ Repeat until The end.
      with their counts), `chatPerSec` (messages a second in each 10 s of the file, from its start) and
      `durationSec` (the file's length).
    - `words` gives the transcript as `lines`, each `[m:ss] text (start-end)`: where it starts, and its first and
-     last word's exact times in seconds.
+     last word's times in seconds. Read it for the cause and the setup; edges come from `--find` (step 5).
    - `frames` writes two stills, 6 s before the peak and 2 s after it: look at both `frames[].file` when you can
      read images.
 4. **Judge** by `judge.md`, and write `<moment>/judge.json`. A `skip`: `rm -f "<moment>/video.mp4"`, log it (step 9),
    and go back to step 1.
 5. **Check the edges.** Write `<moment>/pick.json`, `[{"s": …, "e": …, "title": "…"}]` (with `"hook"` when the
-   verdict has one). Then, with `<length>` the `durationSec` from step 3:
+   verdict has one), each edge on a found phrase (`judge.md` → Edges: `transcript.mjs --find`). Then, with `<length>`
+   the `durationSec` from step 3:
    ```sh
    node "$HOME/.boqo-sniper/tools/picks-check.mjs" "<moment>/pick.json" --duration <length> \
      --words "<moment>/words.json" --min 15 --max 60 --count-min 1 --count-max 1 > "<moment>/checked.json"
    ```
    Read `<moment>/checked.json`.
    - `"ok": false`: fix what its `errors` name in `pick.json`, and check again.
-   - `"ok": true`: the pick carries `moved: {s, e}`, how far each edge moved to a word boundary. An edge that moved
-     1 s or more landed somewhere you did not choose: read the words there (`moment.mjs words
-     "<moment>/words.json" --around <sec>`), set that edge in `pick.json` yourself, and check again, once.
+   - `"ok": true`: the pick carries `moved: {s, e}`, how far each edge moved to a word boundary. An edge set from
+     `--find` moves 0.05 s. One that moved more than 0.1 s either way (`|moved.s|` or `|moved.e|`) landed somewhere
+     you did not choose: find its phrase again (`judge.md` → Edges), set that edge in `pick.json`, and check again,
+     once. An edge in gameplay or music with no words near it stays where you put it.
 6. **Render**, then free the disk:
    ```sh
    node "$HOME/.boqo-sniper/tools/render.mjs" --src "<moment>/video.mp4" --picks "<moment>/checked.json" \
@@ -242,6 +244,8 @@ so, and offer to restart now (Stop, then Starting, step 4), which starts a fresh
 | "Nine minutes and nothing: I'll tell them it's quiet" | A `timeout` is silent. The status line comes every 10 moments or 30 minutes |
 | "The person said 'nice', so I'll post it" | Only the rule posts. With `ask`, a post needs a yes to posting |
 | "I'll keep the moment's video in case they want a redo" | Delete `video.mp4` once judged: 140 MB a moment fills a disk in an evening |
+| "The opening is mid-line, I'll estimate where it falls" | Quote its first words and `--find` them (`judge.md` → Edges) |
+| "picks-check moved an edge 0.4 s, close enough" | More than 0.1 s either way (`\|moved.s\|` or `\|moved.e\|`): find its phrase again and set it |
 | "I'll read chat.json to see what happened" | `moment.mjs read`. The whole file is hundreds of KB |
 | "They said stop, but three moments are queued: I'll finish them" | Stop is quick. The queue waits unless they ask to finish it |
 | "Publishing needs a paid plan, so the session is over" | Posting is off; the watch and the clipping go on |

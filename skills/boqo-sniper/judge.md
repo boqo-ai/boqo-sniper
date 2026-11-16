@@ -54,12 +54,21 @@ When in doubt, skip.
 
 - `s` and `e` are seconds in the moment's file: `0 <= s < e <=` its length, and `e - s` is 15 to 60 s. 20 to 40 s
   suits most stream moments.
-- `s`: the start of the setup. When it starts with speech, put `s` a little inside the line's first word: the
-  line's start time plus 0.05, not between words.
-- `e`: after the payoff and the streamer's first reaction to it, before the next topic. When the last thing is
-  speech, put `e` a little inside that line's last word: its end time minus 0.05.
-- Each `words` line ends `(start-end)` in seconds: those are the numbers to use. For a closer look at the words near
-  one second: `node "$HOME/.boqo-sniper/tools/moment.mjs" words "<moment>/words.json" --around <sec>`.
+- `s`: the start of the setup. `e`: after the payoff and the streamer's first reaction to it, before the next topic.
+- **Set each edge on a found phrase** when it falls on speech. Quote the first 3 to 6 words of the line the clip opens
+  on, and the last 3 to 6 of the line it closes on, as the transcript writes them, and find each near the second you
+  mean (the second inside the moment's file, `[1:52]` is 112):
+  ```sh
+  node "$HOME/.boqo-sniper/tools/transcript.mjs" --words "<moment>/words.json" --find "<3 to 6 words>" --near <sec>
+  ```
+  It gives `{"s", "e", "match", "score"}`, seconds in the moment's file. Use the opening's `s` + 0.05 as the clip's
+  `s` and the closing's `e` - 0.05 as its `e`: a little inside the word, so `picks-check.mjs` moves the edge out to
+  that word's boundary. `match` must start on your first word and end on your last. The returned `s` or `e` must lie
+  within a few seconds of the second you meant: a far exact repeat can beat a near mis-captioned one. On
+  `{"error": "phrase not found near …"}`, read the words there with
+  `node "$HOME/.boqo-sniper/tools/transcript.mjs" --words "<moment>/words.json" --around <sec>` and quote again.
+  Never set an edge from a line's `(start-end)` or from where a word seems to fall in a line: words do not spread
+  evenly over a line, and an estimate lands a word or two off.
 - `picks-check.mjs` moves an edge out to the nearest word's boundary when one is within 1.5 s; an edge in gameplay
   or music with no words near it stays where you put it.
 
