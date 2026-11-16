@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chatRates, frameTimes, normalizeChat, topChat, wordLines } from "../lib/moment.mjs";
+import { FRAME_OFFSETS, chatRates, frameName, frameTimes, normalizeChat, parseOffsets, topChat, wordLines } from "../lib/moment.mjs";
 
 const MOMENT = fileURLToPath(new URL("../tools/moment.mjs", import.meta.url));
 
@@ -115,11 +115,24 @@ test("wordLines with --around keeps the words within span/2 of that second", () 
   assert.deepEqual(wordLines([{ w: " ", s: 1, e: 2 }, { w: "x", s: NaN, e: 1 }]), [], "blank and broken words are dropped");
 });
 
-test("frameTimes clamps both stills into the file", () => {
-  assert.deepEqual(frameTimes(125, 160), [119, 127]);
-  assert.deepEqual(frameTimes(3, 4), [0, 3.9]);
-  assert.deepEqual(frameTimes(500, 160), [159.9, 159.9]);
-  assert.deepEqual(frameTimes(-10, 160), [0, 0]);
+test("frameTimes: four stills by default, from 12 s before the peak to 2 s after, clamped into the file", () => {
+  assert.deepEqual(FRAME_OFFSETS, [-12, -6, 0, 2]);
+  assert.deepEqual(frameTimes(125, 160), [113, 119, 125, 127]);
+  assert.deepEqual(frameTimes(3, 4), [0, 0, 3, 3.9]);
+  assert.deepEqual(frameTimes(500, 160), [159.9, 159.9, 159.9, 159.9]);
+  assert.deepEqual(frameTimes(-10, 160), [0, 0, 0, 0]);
+  assert.deepEqual(frameTimes(60, 160, [-20, 5]), [40, 65]);
+});
+
+test("frameName names a still by its offset; parseOffsets reads the list", () => {
+  assert.equal(frameName(-12), "frame-m12.jpg");
+  assert.equal(frameName(0), "frame-0.jpg");
+  assert.equal(frameName(2), "frame-2.jpg");
+  assert.equal(frameName(-1.5), "frame-m1.5.jpg");
+  assert.deepEqual(parseOffsets("-12,-6,0,2"), [-12, -6, 0, 2]);
+  assert.deepEqual(parseOffsets(" -3 , 4 "), [-3, 4]);
+  assert.deepEqual(parseOffsets("-6,-6,1"), [-6, 1], "a repeat is one still");
+  for (const bad of ["", "a", "1,,2", "-6,x"]) assert.throws(() => parseOffsets(bad), /--offsets/, bad);
 });
 
 test("read: meta, the top chat around the peak, chat rates and the video's length", { timeout: 60000 }, async () => {
@@ -176,17 +189,24 @@ test("words: the CLI prints the lines as one JSON line; bad flags are errors", a
   }
 });
 
-test("frames: two stills, times clamped into the video, even for a peak past its end", { timeout: 60000 }, async () => {
+test("frames: a still per offset, named by it, times clamped into the video, even for a peak past its end", { timeout: 60000 }, async () => {
   const dir = await tmp();
   try {
     const video = path.join(dir, "video.mp4");
-    makeVideo(video, 4);
+    makeVideo(video, 20);
     const out = path.join(dir, "out dir");
-    const r = await run(["frames", video, "--at", "3", "--out", out]);
+    const r = await run(["frames", video, "--at", "14", "--out", out]);
     assert.equal(r.code, 0, r.stdout);
-    assert.deepEqual(r.json.frames.map((f) => f.at), [0, 3.9]);
-    assert.deepEqual(r.json.frames.map((f) => path.basename(f.file)), ["frame-1.jpg", "frame-2.jpg"]);
+    assert.deepEqual(r.json.frames.map((f) => f.at), [2, 8, 14, 16]);
+    assert.deepEqual(r.json.frames.map((f) => f.offset), [-12, -6, 0, 2]);
+    assert.deepEqual(r.json.frames.map((f) => path.basename(f.file)), ["frame-m12.jpg", "frame-m6.jpg", "frame-0.jpg", "frame-2.jpg"]);
     for (const f of r.json.frames) assert.ok((await fs.stat(f.file)).size > 0, f.file);
+
+    const more = await run(["frames", video, "--at", "14", "--offsets", "-9,1", "--out", out]);
+    assert.equal(more.code, 0, more.stdout);
+    assert.deepEqual(more.json.frames.map((f) => [path.basename(f.file), f.at]), [["frame-m9.jpg", 5], ["frame-1.jpg", 15]]);
+    assert.deepEqual((await fs.readdir(out)).sort(), ["frame-0.jpg", "frame-1.jpg", "frame-2.jpg", "frame-m12.jpg", "frame-m6.jpg", "frame-m9.jpg"], "a second call adds, it does not replace");
+    assert.equal((await run(["frames", video, "--at", "1", "--offsets", "x", "--out", out])).code, 1);
 
     const late = await run(["frames", video, "--at", "100", "--out", out]);
     assert.equal(late.code, 0, late.stdout);

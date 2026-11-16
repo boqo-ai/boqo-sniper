@@ -13,7 +13,8 @@ What `moment.mjs` gave you (SKILL.md → The loop, step 3):
   - `topChat`, what chat repeated most around the peak;
   - `chatPerSec`, how chat ran over the whole file, 10 s at a time.
 - **`words`:** the transcript, line by line.
-- **`frames`:** two stills, 6 s before the peak and 2 s after it, when you can read images.
+- **`frames`:** four stills, 12 s and 6 s before the peak, at it, and 2 s after it, when you can read images. Look
+  at all of them: the cause is often 8 to 15 s before the peak, and only the earliest still shows it.
 
 Times are seconds in the moment's file, about 160 s long, with the peak about 125 s in. Chat reacts 2 to 10 s after
 what caused it, so the cause sits before the peak.

@@ -139,8 +139,10 @@ Repeat until The end.
      `durationSec` (the file's length).
    - `words` gives the transcript as `lines`, each `[m:ss] text (start-end)`: where it starts, and its first and
      last word's times in seconds. Read it for the cause and the setup; edges come from `--find` (step 5).
-   - `frames` writes two stills, 6 s before the peak and 2 s after it: look at both `frames[].file` when you can
-     read images.
+   - `frames` writes four stills, 12 s and 6 s before the peak, at it, and 2 s after it (`frame-m12.jpg`,
+     `frame-m6.jpg`, `frame-0.jpg`, `frame-2.jpg`): look at every `frames[].file` when you can read images. To see
+     another second, call it again with `--offsets "<seconds from the peak, comma separated>"`; it adds stills named
+     by those offsets and keeps the others.
 4. **Judge** by `judge.md`, and write `<moment>/judge.json`. A `skip`: `rm -f "<moment>/video.mp4"`, log it (step 9),
    and go back to step 1.
 5. **Check the edges.** Write `<moment>/pick.json`, `[{"s": …, "e": …, "title": "…"}]` (with `"hook"` when the

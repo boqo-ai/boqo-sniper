@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The moment in hand, for the agent: what chat said, the words, two frames.
+// The moment in hand, for the agent: what chat said, the words, the stills.
 // Not part of the vendored engine.
 //
 //   moment.mjs read <momentDir>
@@ -15,17 +15,29 @@
 //     its start as m:ss and its exact first and last word times in seconds.
 //     --around keeps the words starting within span/2 of that second; without
 //     it, every word.
-//   moment.mjs frames <video.mp4> --at <sec> --out <dir>
-//     {"frames": [{"file","at"}, {"file","at"}]}
-//     Stills 6 s before and 2 s after --at (960 wide, frame-1.jpg and
-//     frame-2.jpg), each time clamped into the file.
+//   moment.mjs frames <video.mp4> --at <sec> [--offsets "-12,-6,0,2"] --out <dir>
+//     {"frames": [{"file","at","offset"}, ...]}
+//     One still per offset from --at (960 wide), each time clamped into the
+//     file, named by its offset: frame-m12.jpg, frame-m6.jpg, frame-0.jpg,
+//     frame-2.jpg. Another call with other offsets adds its stills beside them.
 //
 // One JSON line on stdout (exit 0), or {"error": "..."} (exit 1).
 
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { chatRates, durationOf, frameTimes, topChat, wordLines, BEFORE_PEAK_SEC, AFTER_PEAK_SEC } from "../lib/moment.mjs";
+import {
+  AFTER_PEAK_SEC,
+  BEFORE_PEAK_SEC,
+  FRAME_OFFSETS,
+  chatRates,
+  durationOf,
+  frameName,
+  frameTimes,
+  parseOffsets,
+  topChat,
+  wordLines,
+} from "../lib/moment.mjs";
 
 function fail(message) {
   process.stdout.write(JSON.stringify({ error: message }) + "\n");
@@ -67,7 +79,7 @@ function num(v, name) {
 }
 
 const USAGE =
-  "usage: moment.mjs read <momentDir> | words <words.json> [--around <sec>] [--span 30] | frames <video.mp4> --at <sec> --out <dir>";
+  'usage: moment.mjs read <momentDir> | words <words.json> [--around <sec>] [--span 30] | frames <video.mp4> --at <sec> [--offsets "-12,-6,0,2"] --out <dir>';
 
 function cmdRead(argv) {
   const { positional } = parseFlags(argv, []);
@@ -96,17 +108,20 @@ function cmdWords(argv) {
 }
 
 function cmdFrames(argv) {
-  const { opt, positional } = parseFlags(argv, ["--at", "--out"]);
+  const { opt, positional } = parseFlags(argv, ["--at", "--out", "--offsets"]);
   if (positional.length !== 1) throw new Error(USAGE);
   if (opt.out === undefined) throw new Error("--out is required");
   const at = num(opt.at, "--at");
+  const offsets = opt.offsets === undefined ? FRAME_OFFSETS : parseOffsets(opt.offsets);
   const video = path.resolve(positional[0]);
   if (!fs.existsSync(video)) throw new Error(`no video at ${video}`);
   const out = path.resolve(opt.out);
   fs.mkdirSync(out, { recursive: true });
   const frames = [];
-  for (const [i, t] of frameTimes(at, durationOf(video)).entries()) {
-    const name = `frame-${i + 1}.jpg`;
+  const times = frameTimes(at, durationOf(video), offsets);
+  for (const [i, t] of times.entries()) {
+    const offset = offsets[i];
+    const name = frameName(offset);
     fs.rmSync(path.join(out, name), { force: true });
     // cwd is the output folder and the output name is relative (no drive colon in any argument ffmpeg parses as options)
     const r = spawnSync(
@@ -123,7 +138,7 @@ function cmdFrames(argv) {
     if (r.status !== 0 || size === 0) {
       throw new Error(`no frame at ${t} s: ${String(r.stderr).trim().slice(-200) || `ffmpeg exited ${r.status}`}`);
     }
-    frames.push({ file, at: t });
+    frames.push({ file, at: t, offset });
   }
   return { frames };
 }
