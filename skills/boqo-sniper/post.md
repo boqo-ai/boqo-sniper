@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ bf31f0c; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ 5558df4; keep in step -->
 # Posting through boqo
 
 Runs after a clip is shown (SKILL.md → The loop, step 8, and Posting). It posts only through boqo's tools, and only by
@@ -16,7 +16,8 @@ out in full, in double quotes (SKILL.md → Overview).
      answer: stop; the files stay where they are.
    - `{"auto": N}`: the clips go best first (`clip-01` first), up to N minus the posts already made today (the
      `posted` counts of today's lines in `runs.md`), to the config's `accounts`, with no question. The person is told
-     what went (step 7). No `accounts` in the config: as `ask`.
+     what went (step 7). No `accounts` in the config: as `ask`. A line in `runs.md` for this same link or file with
+     `posted` above 0: as `ask`, saying its clips went out on that line's date (a re-run picks the same moments).
 4. **The accounts.** `list_accounts`, the ones with status `active`. With `ask`, the person names them; several and
    no name: ask which, never choose for them. None active: say so (they connect or reconnect it in boqo, under
    Accounts), and stop.
@@ -36,13 +37,17 @@ One clip at a time. `<file>` is its path, `<k>` its number.
    `<clips>/upload-<k>.json`: it still holds live signed URLs.
 5. `complete_upload {projectId}`. A link in its reply (a daily credit cap on this connection): give it to the person,
    and stop this clip.
-6. `post_video {items: [{source: "<projectId>", accountIds: ["<id>", …], when: "queue"}]}`. It takes a Post project
-   that is not ready yet, and boqo makes the post once the file is ready, so there is no need to wait first.
-   `"queue"` is each account's next free slot; a time the person named is `{date: "YYYY-MM-DD", time: "HH:MM"}` on
-   the account's own clock. No `caption` (The caption) and no `uniqueize`.
+6. `post_video {items: [{source: "<projectId>", accountIds: ["<id>", …], when: "queue"}]}`, once for this clip. It
+   takes a Post project that is not ready yet, and boqo makes the post once the file is ready, so there is no need
+   to wait first. `"queue"` is each account's next free slot; a time the person named is `{date: "YYYY-MM-DD", time:
+   "HH:MM"}` on the account's own clock. No `caption` (The caption) and no `uniqueize`.
+   An unclear reply (a timeout, a dropped connection, no answer): never call `post_video` again for this clip; it
+   may have gone through. `list_schedule {accountId, to: <35 days from today>}` for each of its accounts: a post of
+   this clip there (its title) counts as posted; none: tell the person it may not have gone out.
 7. One line: the clip, the accounts, and when it goes out.
 
-**After the last clip,** `get_project {projectId}` for each one posted. `queued`, `processing` or `ready` is fine.
+**After the last clip,** delete any reply file left, `find "<clips>" -maxdepth 1 -type f -name 'upload-*.json' -delete`,
+then `get_project {projectId}` for each one posted. `queued`, `processing` or `ready` is fine.
 `failed`: tell the person which clip, with its `error` (the text inside its `<data kind="project_error">` tag); that
 clip will not be posted. To look again later without a foreground `sleep` (Claude Code refuses one), run
 `sleep 20` in the background and check when it ends.
