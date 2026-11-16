@@ -24,7 +24,9 @@ brand kit.
 - ffmpeg with libass
 - yt-dlp
 - whisper.cpp (`whisper-cli`) and a model; it writes every clip's captions
-- streamlink, recommended: it skips Twitch's ads
+
+The watcher records with yt-dlp, ads and all. streamlink, which skips Twitch's ads, is opt-in and untested in this
+beta: `"capture": "streamlink"` in `~/.boqo/boqo-sniper/config.json` turns it on.
 
 The install's doctor names what is missing and how to get it on macOS, Windows and Linux.
 

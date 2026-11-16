@@ -52,10 +52,9 @@ import {
   segmentName,
 } from "../lib/buffer.mjs";
 import { measureLoudness } from "../lib/loudness.mjs";
+import { captureCommand as sourceCommand, chooseCapture, readConfig, stallSecFor } from "../lib/capture.mjs";
 
 export const MAX_OFFLINE_POLLS = 10;
-/** No new segment for this long while capturing: the source is stuck, kill it and start over. */
-const STALL_SEC = 60;
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
@@ -210,21 +209,16 @@ async function runningWatcher(channel) {
 // ---- capture --------------------------------------------------------------
 
 /**
- * streamlink when it is installed, else yt-dlp. Both write the stream to
- * stdout; ffmpeg copies it into 10 s segments named by the UTC second they open.
+ * yt-dlp, or streamlink when config.json opts in (lib/capture.mjs). Both write
+ * the stream to stdout; ffmpeg copies it into 10 s segments named by the UTC
+ * second they open. BOQO_SNIPER_SOURCE (a JSON argv) stands in for them in tests.
  */
 function captureCommand(tool, channel) {
   if (tool === "test-source") {
     const [cmd, ...args] = JSON.parse(process.env.BOQO_SNIPER_SOURCE);
     return { cmd, args };
   }
-  if (tool === "streamlink") {
-    return { cmd: "streamlink", args: ["--twitch-disable-ads", "--stdout", `twitch.tv/${channel}`, "best"] };
-  }
-  return {
-    cmd: "yt-dlp",
-    args: ["-q", "-f", "best[height<=1080]/best", "-o", "-", `https://www.twitch.tv/${channel}`],
-  };
+  return sourceCommand(tool, channel);
 }
 
 function segmenterArgs() {
@@ -341,16 +335,27 @@ async function main() {
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
   const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
-  const stallSec = envNumber("BOQO_SNIPER_STALL_SEC", STALL_SEC);
 
   let tool = null;
   if (!(await hasTool("ffmpeg", "-version"))) fail("ffmpeg is not on PATH");
   if (!replay) {
     if (process.env.BOQO_SNIPER_SOURCE) tool = "test-source";
-    else if (await hasTool("streamlink")) tool = "streamlink";
-    else if (await hasTool("yt-dlp")) tool = "yt-dlp";
-    else fail("neither streamlink nor yt-dlp is on PATH");
+    else {
+      const { config, warning } = await readConfig();
+      if (warning) console.error(warning);
+      const wantsStreamlink = config.capture === "streamlink";
+      try {
+        tool = chooseCapture(config, {
+          streamlink: wantsStreamlink && (await hasTool("streamlink")),
+          ytdlp: !wantsStreamlink && (await hasTool("yt-dlp")),
+        });
+      } catch (err) {
+        fail(err.message);
+      }
+      if (tool === "streamlink") console.error("recording with streamlink (config.json); this path is untested in the beta");
+    }
   }
+  const stallSec = envNumber("BOQO_SNIPER_STALL_SEC", stallSecFor(tool));
 
   let running = null;
   try {

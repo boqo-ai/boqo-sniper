@@ -1,6 +1,6 @@
 ---
 name: boqo-sniper
-description: "Use when the person wants to clip a live Twitch stream as it happens, or runs /boqo-sniper: a live session on their own PC that watches one channel, catches the moments chat goes wild, and turns each into a branded vertical 9:16 clip with captions and their logo (streamlink or yt-dlp, ffmpeg, whisper.cpp), judged by you and posted through boqo only on their rule."
+description: "Use when the person wants to clip a live Twitch stream as it happens, or runs /boqo-sniper: a live session on their own PC that watches one channel, catches the moments chat goes wild, and turns each into a branded vertical 9:16 clip with captions and their logo (yt-dlp, ffmpeg, whisper.cpp), judged by you and posted through boqo only on their rule."
 argument-hint: "<twitch channel or link> [brand name]"
 ---
 
@@ -58,9 +58,12 @@ two chats, as many as the PC carries.
 - **Disk:** the watcher keeps about 700 MB of buffer while it runs, and every moment adds about 140 MB until you
   delete its `video.mp4` (The loop, steps 4 and 6).
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
-- Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp,
-  streamlink or whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required --streamlink`
-  and give the person its `hints`.
+- Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp or
+  whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required` and give the person its
+  `hints`.
+- **The capture is yt-dlp,** ads and all. streamlink skips Twitch's ads but is untested in this beta: only when the
+  person asks for it, add `"capture": "streamlink"` to `config.json` (the watcher reads it at start; streamlink must be
+  installed). Never suggest it unasked.
 
 ## Starting
 
