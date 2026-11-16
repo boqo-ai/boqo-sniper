@@ -487,8 +487,16 @@ async function clipNowRequest(target, label) {
   const pid = dir ? await watcherPid(dir) : null;
   if (!dir || pid === null) fail(`no watcher is running for ${label}`);
   const status = await readStatus(dir);
+  // The answers that mean nothing will be cut, said here and not only on the watcher's stderr:
+  // a cut needs a picture in the buffer, and the disk floor applies to a hand-made moment too.
+  const refuse = (reason, extra = {}) => {
+    console.log(JSON.stringify({ clipNow: false, reason, session: dir, state: status?.state ?? "waiting", ...extra }));
+  };
+  if (!status || !(status.segments > 0)) return refuse("buffer empty");
+  if (status.state !== "live") return refuse(`stream ${status.state}`);
+  if (status.lowDisk) return refuse("disk", { lowDisk: status.lowDisk });
   await fs.writeFile(path.join(dir, "clipnow"), String(Date.now()));
-  console.log(JSON.stringify({ clipNow: true, session: dir, state: status?.state ?? "waiting" }));
+  console.log(JSON.stringify({ clipNow: true, session: dir, state: status.state }));
 }
 
 // ---- the watcher ----------------------------------------------------------
@@ -625,6 +633,8 @@ async function main() {
   const pending = []; // moments waiting for their post-roll
   let lastDoneEnd = -Infinity;
   let moments = 0;
+  let dropped = 0; // listed moments deleted to keep the newest MAX_LISTED
+  let lowDisk = null; // set with every status write
   const skipped = owned.skipped; // moments not cut: { queue, disk }
   let state = "waiting";
   let since = iso(clock.now());
@@ -639,8 +649,15 @@ async function main() {
     }
   };
 
+  /** `{freeBytes, minFreeBytes}` while the disk is under the floor (lib/buffer.mjs MIN_FREE_BYTES), else null. */
+  async function diskLow() {
+    const free = await freeBytes(dir);
+    return free !== null && free < minFreeBytes ? { freeBytes: free, minFreeBytes } : null;
+  }
+
   async function writeStatus() {
     if (crashed) return; // the crash handler's "failed" is the last word
+    lowDisk = await diskLow();
     const now = clock.now();
     let recent = 0;
     for (let i = chatLog.length - 1; i >= 0 && chatLog[i].t >= now - 30; i--) recent++;
@@ -656,6 +673,8 @@ async function main() {
         skipped,
         chatPerSec: Math.round((recent / 30) * 10) / 10,
         updatedAt: iso(now),
+        ...(dropped > 0 ? { dropped } : {}),
+        ...(lowDisk ? { lowDisk } : {}),
         ...(state === "failed" ? { error: failMessage } : {}),
       },
       { quiet: true },
@@ -875,6 +894,7 @@ async function main() {
     for (const d of listed.slice(0, Math.max(0, listed.length - MAX_LISTED))) {
       console.error(`listed moment ${path.basename(d)} deleted: only the newest ${MAX_LISTED} below the bar are kept`);
       await fs.rm(d, { recursive: true, force: true });
+      dropped++;
     }
   }
 
@@ -1042,6 +1062,14 @@ async function main() {
   let failedCaptures = 0; // consecutive captures that made no segment
   try {
     await writeStatus();
+    if (lowDisk) {
+      // Said once, here: a start with the disk under the floor looks normal and then cuts nothing (status.lowDisk,
+      // and the end line, carry it too). The floor is checked against the free space at each cut, queued cuts
+      // already out of it: lib/buffer.mjs says how much that is to reach a full queue.
+      console.error(
+        `low disk: ${(lowDisk.freeBytes / 1e9).toFixed(1)} GB free, under the ${(lowDisk.minFreeBytes / 1e9).toFixed(1)} GB floor: no moment will be cut until space is freed`,
+      );
+    }
     while (!(await checkStop())) {
       const before = totalSegments;
       await (replay ? captureReplay() : captureLive());
@@ -1101,7 +1129,7 @@ async function main() {
   await fs.rm(stopFile, { force: true });
 
   if (exitError) fail(failMessage);
-  process.stdout.write(JSON.stringify({ state, platform, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
+  process.stdout.write(JSON.stringify({ state, platform, channel, session: dir, moments, offlinePolls, ...(lowDisk ? { lowDisk } : {}) }) + "\n", () => process.exit(0));
 }
 
 main().catch((err) => failSession(err?.message || String(err)));

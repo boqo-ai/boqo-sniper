@@ -64,7 +64,8 @@ two chats, as many as the PC carries.
 - **Disk:** the watcher keeps about 320 MB of buffer while it runs (1080p60, 360 s), and every moment adds about
   260 MB until you delete its `video.mp4`. It does not cut a new moment while 10 wait for you or less than 5 GB is
   free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`). Moments below the bar are no queue; the newest
-  3 are kept.
+  3 are kept (`dropped` counts older ones deleted). `status.mjs` carrying `lowDisk` means the disk is under 5 GB free
+  now and nothing will be cut: say so once; a full queue of 10 needs 7 to 8 GB free at the start.
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
 - Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp or
   whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required` and give the person its
@@ -159,7 +160,8 @@ Repeat until The end.
 ```sh
 node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --clip-now
 ```
-makes a moment of score 100 at this second; it arrives from `next.mjs` about 35 s later (the post-roll). "Clip it"
+makes a moment of score 100 at this second; it arrives from `next.mjs` about 35 s later (the post-roll).
+`{"clipNow": false, "reason": "buffer empty" | "stream <state>" | "disk"}` says nothing will be cut: tell the person why. "Clip it"
 (about a moment you told them is below the bar): `next.mjs "<channel>" --take` claims the newest listed one, or
 `--take "<moment name>"` that one; `next.mjs "<channel>" --list` lists them. Both go on at step 2.
 

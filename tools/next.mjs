@@ -14,7 +14,8 @@
 //   {"stopped": "<state>"}               watcher offline/stopped, or no session
 //   {"stopped": "failed", "error": "..."} the watcher ended on an error
 //   {"timeout": true, "status": {...}}   nothing came in time
-//   {"moments": [...]}                   --list: name, moment, score, band, signalLine, title, peakIso
+//   {"moments": [...], "dropped": n}    --list: name, moment, score, band, signalLine, title, peakIso; and how many
+//                                        older ones the watcher deleted to keep the newest 3
 // Never waits past 540 s: Claude Code caps one shell command at 600 s. The default and the skill's value are 170,
 // since Claude Code moves a command to the background after about 180 s whatever its timeout.
 
@@ -86,13 +87,14 @@ async function momentNames(momentsDir) {
   }
 }
 
-/** Create a marker file; false when it is already there (another `next` won it). */
-async function mark(file) {
+/** Create a marker file: true; false when it is already there (another `next` won it); null when its folder is gone (the watcher deleted an old listed moment). */
+export async function mark(file) {
   try {
     await (await fsp.open(file, "wx")).close();
     return true;
   } catch (err) {
     if (err.code === "EEXIST") return false;
+    if (err.code === "ENOENT") return null;
     throw err;
   }
 }
@@ -131,7 +133,9 @@ async function listed(momentsDir, settings) {
   return out;
 }
 
-async function doList(momentsDir, settings) {
+const DROPPED_HINT = "it may have been dropped: the watcher keeps only the newest 3 moments below the bar";
+
+async function doList(momentsDir, settings, status) {
   const moments = (await listed(momentsDir, settings)).map(({ name, dir, meta }) => ({
     name,
     moment: dir,
@@ -141,7 +145,7 @@ async function doList(momentsDir, settings) {
     title: meta.title ?? null,
     peakIso: meta.peakIso ?? null,
   }));
-  console.log(JSON.stringify({ moments }));
+  console.log(JSON.stringify({ moments, dropped: status?.dropped ?? 0 }));
 }
 
 async function doTake(momentsDir, settings, name) {
@@ -155,10 +159,12 @@ async function doTake(momentsDir, settings, name) {
     pick = all.find((m) => m.name === name);
     if (!pick) {
       const known = (await momentNames(momentsDir)).includes(name);
-      fail(known ? `moment ${name} is not listed (it is at the bar, or already claimed)` : `no moment named ${name}`);
+      fail(known ? `moment ${name} is not listed (it is at the bar, or already claimed)` : `no moment named ${name}: ${DROPPED_HINT}`);
     }
   }
-  if (!(await mark(path.join(pick.dir, ".taken")))) fail(`moment ${pick.name} is already claimed`);
+  const got = await mark(path.join(pick.dir, ".taken"));
+  if (got === null) fail(`no moment named ${pick.name}: ${DROPPED_HINT}`); // deleted between the listing and the claim
+  if (!got) fail(`moment ${pick.name} is already claimed`);
   console.log(JSON.stringify({ moment: pick.dir, meta: pick.meta }));
 }
 
@@ -176,7 +182,7 @@ async function main() {
   }
   const momentsDir = path.join(session, "moments");
   const settings = await readSessionSettings(session);
-  if (args.mode === "list") return doList(momentsDir, settings);
+  if (args.mode === "list") return doList(momentsDir, settings, await readStatus(session));
   if (args.mode === "take") return doTake(momentsDir, settings, args.take);
   const deadline = Date.now() + args.timeout * 1000;
 

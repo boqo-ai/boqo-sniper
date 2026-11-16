@@ -296,6 +296,7 @@ test("--list shows the unclaimed moments below the bar with score, band, signal 
         { name: "20261116-100000", moment: a, score: 79, band: "strong", signalLine: "NO WAY ×40 · 9/s", title: "chat spike — x", peakIso: "2026-11-16T10:00:00.000Z" },
         { name: "20261116-100500", moment: b, score: 64, band: "decent", signalLine: "Audio +7 LU", title: "audio spike", peakIso: null },
       ],
+      dropped: 0,
     });
   });
 });
@@ -380,5 +381,39 @@ test("a v0.1 session folder (watch/<login>/) is read: its moment is handed out",
     assert.equal(r.json.moment, path.join(old, "moments", "20261110-120500"));
     const s = spawnSync(process.execPath, [fileURLToPath(new URL("../tools/status.mjs", import.meta.url)), "chan"], { env: process.env, encoding: "utf8" });
     assert.equal(JSON.parse(s.stdout).state, "stopped");
+  });
+});
+
+// ---- dropped listed moments ----
+
+test("--list says how many older listed moments the watcher dropped, from status.json", async () => {
+  await withHome(async () => {
+    const session = await newSession("chan");
+    await fs.writeFile(path.join(session, "status.json"), JSON.stringify({ state: "live", channel: "chan", dropped: 2 }));
+    await addMoment(session, "20261116-100000", { score: 70 });
+    const r = await runNext(["chan", "--list"]);
+    assert.equal(r.json.dropped, 2);
+    assert.equal(r.json.moments.length, 1);
+  });
+});
+
+test("--take of a name that is gone says it may have been dropped", async () => {
+  await withHome(async () => {
+    const session = await newSession("chan");
+    await addMoment(session, "20261116-100000", { score: 70 });
+    const r = await runNext(["chan", "--take", "20261116-090000"]);
+    assert.equal(r.code, 1);
+    assert.match(r.json.error, /^no moment named 20261116-090000: it may have been dropped: the watcher keeps only the newest 3/);
+  });
+});
+
+test("claiming a marker in a folder that was deleted meanwhile answers null, not a crash", async () => {
+  await withHome(async (home) => {
+    const { mark } = await import("../tools/next.mjs");
+    const gone = path.join(home, "no-such-moment", ".taken");
+    assert.equal(await mark(gone), null, "the folder is gone (ENOENT)");
+    await fs.mkdir(path.join(home, "m"));
+    assert.equal(await mark(path.join(home, "m", ".taken")), true);
+    assert.equal(await mark(path.join(home, "m", ".taken")), false, "already there (EEXIST)");
   });
 });

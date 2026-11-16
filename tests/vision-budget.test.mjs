@@ -44,3 +44,83 @@ test("a clock that steps back does not free the budget", () => {
   now = 100;
   assert.equal(b.take(1), false);
 });
+
+// ---- persistence: one hour per session, shared by every process and kept over a restart ----
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+function tmpFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sniper-vision-"));
+  return { dir, file: path.join(dir, "vision.json") };
+}
+
+test("two budgets on one file share the count", () => {
+  const { dir, file } = tmpFile();
+  try {
+    const a = visionBudget({ perHour: 10, now: () => 100, file });
+    const b = visionBudget({ perHour: 10, now: () => 100, file });
+    assert.equal(a.take(6), true);
+    assert.equal(b.used(), 6, "the second process sees what the first spent");
+    assert.equal(b.take(5), false, "6 + 5 is over 10");
+    assert.equal(b.take(4), true);
+    assert.equal(a.used(), 10);
+    assert.equal(a.take(1), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a restart (a new instance) keeps the hour; the hour still rolls", () => {
+  const { dir, file } = tmpFile();
+  try {
+    let now = 1000;
+    visionBudget({ perHour: 600, now: () => now, file }).take(600);
+    const again = visionBudget({ perHour: 600, now: () => now + 60, file });
+    assert.equal(again.used(), 600);
+    assert.equal(again.take(1), false, "a restart does not refill it");
+    now = 1000 + 3601;
+    assert.equal(visionBudget({ perHour: 600, now: () => now, file }).take(1), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the file is a list of [t, n], pruned on write, and written whole (no temp file left)", () => {
+  const { dir, file } = tmpFile();
+  try {
+    let now = 0;
+    const b = visionBudget({ perHour: 100, now: () => now, file });
+    b.take(3);
+    now = 100;
+    b.take(4);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), [[0, 3], [100, 4]]);
+    now = 3650; // the first fell out
+    b.take(2);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), [[100, 4], [3650, 2]], "pruned on write");
+    assert.deepEqual(fs.readdirSync(dir), ["vision.json"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a missing or corrupt file counts as empty, and nothing throws", () => {
+  const { dir, file } = tmpFile();
+  try {
+    const b = visionBudget({ perHour: 5, now: () => 0, file });
+    assert.equal(b.used(), 0, "missing");
+    for (const junk of ["{half", "null", '{"a":1}', '[[1],["x",2],[3,-4],[0,2]]', ""]) {
+      fs.writeFileSync(file, junk);
+      const c = visionBudget({ perHour: 5, now: () => 0, file });
+      assert.doesNotThrow(() => c.used(), junk);
+      assert.equal(c.take(5), junk === '[[1],["x",2],[3,-4],[0,2]]' ? false : true, junk);
+    }
+    // an unwritable place is no reason to refuse or crash: the instance keeps its own count
+    const lost = visionBudget({ perHour: 2, now: () => 0, file: path.join(dir, "no", "such", "dir", "vision.json") });
+    assert.equal(lost.take(2), true);
+    assert.equal(lost.take(1), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

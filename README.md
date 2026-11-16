@@ -45,7 +45,7 @@ Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai
 - One watch per agent session. To watch two channels, open two sessions, as many as your PC carries.
 - Disk while live: about 320 MB for the 6-minute buffer (300 s window plus 60 s) at 1080p60, plus about 260 MB for each
   moment waiting for your agent. At most 10 wait (about 2.6 GB); past that, or with less than 5 GB free, the watcher
-  skips new moments. Moments below your bar are listed for "clip it" and the newest 3 are kept.
+  skips new moments (the floor is checked against the free space at each cut, so a full queue of 10 needs 7 to 8 GB free at the start). Moments below your bar are listed for "clip it" and the newest 3 are kept.
 - The capture is the stream as it is sent (1080p60 on most channels), copied, never re-encoded. The CPU works hard only
   when a moment comes in: whisper and the render take a few minutes.
 

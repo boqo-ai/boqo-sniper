@@ -107,7 +107,8 @@ test("replay: one burst makes one ~300 s moment, then 10 offline polls end the r
   try {
     await makeSegments(path.join(work, "segs"), 70);
     await makeChat(path.join(work, "chat.jsonl"), 420, 300);
-    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "1000" };
+    // a small floor: this test is about the status file's keys, not about the machine's free space
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "1000", BOQO_SNIPER_MIN_FREE_MB: "1" };
     const t0 = Date.now();
     const r = await run(WATCH, ["Chan_One", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
     assert.equal(r.code, 0, r.stderr);
@@ -912,7 +913,74 @@ test("moments below the bar are no queue and only the newest 3 are kept", { time
     assert.equal(status.moments, 5);
     assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
     assert.equal(names.length, 3, `the newest 3 stay, got ${names}`);
+    assert.equal(status.dropped, 2, "status counts the moments it deleted");
+    const list = await run(NEXT, ["chan", "--list"], env);
+    assert.equal(list.json.dropped, 2);
+    assert.equal(list.json.moments.length, 3);
     assert.match(r.stderr, /listed moment .* deleted: only the newest 3/);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a disk under the floor at start: one stderr line, lowDisk in status and in the end line, and the status stays accurate", { timeout: 180000 }, async () => {
+  const work = await tmp("lowdisk");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 20);
+    await makeChat(path.join(work, "chat.jsonl"), 120, null);
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MIN_FREE_MB: "1000000000000" }; // an exabyte
+    const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stderr.split("\n").filter((l) => l.startsWith("low disk:")).length, 1, "said once");
+    assert.match(r.stderr, /low disk: [\d.]+ GB free, under the 1000000000\.0 GB floor/);
+    assert.equal(r.json.lowDisk.minFreeBytes, 1e18);
+    assert.ok(r.json.lowDisk.freeBytes > 0);
+    const status = JSON.parse(await fs.readFile(path.join(await onlySession(home, "chan"), "status.json"), "utf8"));
+    assert.deepEqual(Object.keys(status.lowDisk).sort(), ["freeBytes", "minFreeBytes"]);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("`--clip-now` says why nothing will be cut: low disk, an empty buffer, a stream that is not live", { timeout: 60000 }, async () => {
+  const work = await tmp("clipnow-refuse");
+  const home = path.join(work, "home");
+  try {
+    const { newSession } = await import("../lib/session.mjs");
+    const old = process.env.BOQO_HOME;
+    process.env.BOQO_HOME = home;
+    let dir;
+    try {
+      dir = await newSession("chan");
+    } finally {
+      if (old === undefined) delete process.env.BOQO_HOME;
+      else process.env.BOQO_HOME = old;
+    }
+    // a sleeping process named like the watcher, so watcherPid sees a live watcher
+    const fake = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 30000)", "watch.mjs"], { stdio: "ignore" });
+    try {
+      await fs.writeFile(path.join(dir, "watch.pid"), String(fake.pid));
+      const ask = async (status) => {
+        await fs.writeFile(path.join(dir, "status.json"), JSON.stringify({ ...status, updatedAt: new Date().toISOString(), channel: "chan" }));
+        const r = await run(WATCH, ["chan", "--clip-now"], { BOQO_HOME: home });
+        assert.equal(r.code, 0, r.stdout + r.stderr);
+        return r.json;
+      };
+      let j = await ask({ state: "waiting", segments: 0 });
+      assert.deepEqual([j.clipNow, j.reason], [false, "buffer empty"]);
+      j = await ask({ state: "waiting", segments: 12 });
+      assert.deepEqual([j.clipNow, j.reason], [false, "stream waiting"]);
+      const low = { freeBytes: 1e9, minFreeBytes: 5e9 };
+      j = await ask({ state: "live", segments: 12, lowDisk: low });
+      assert.deepEqual([j.clipNow, j.reason, j.lowDisk], [false, "disk", low]);
+      await assert.rejects(fs.access(path.join(dir, "clipnow")), "nothing was asked of the watcher");
+      j = await ask({ state: "live", segments: 12 });
+      assert.equal(j.clipNow, true);
+      await fs.access(path.join(dir, "clipnow"));
+    } finally {
+      fake.kill("SIGKILL");
+    }
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
