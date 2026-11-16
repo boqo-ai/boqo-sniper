@@ -17,6 +17,7 @@ import {
 import { spawn } from "node:child_process";
 import { toolEnv } from "../engine/env.mjs";
 import { lineReader, parseLoudnessLine } from "../lib/loudness.mjs";
+import { durationOf } from "../lib/moment.mjs";
 import { SecondBuckets } from "../lib/boqo/buckets.mjs";
 import { CAPTURE_STALL_SEC } from "../lib/boqo/watch-constants.mjs";
 
@@ -146,10 +147,11 @@ test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and 
     const code = await new Promise((resolve) => ff.on("close", resolve));
     assert.equal(code, 0, other.slice(-500));
     const segments = (await fs.readdir(dir)).filter((f) => /^seg_\d{14}\.ts$/.test(f)).sort();
-    // Cuts fall at stream 6 s and 12 s, so the third segment needs a keyframe past 12 s. The feed runs 3 s beyond
-    // it (a keyframe every second), so a few frames of start offset cannot drop the cut; fewer than three
-    // segments is then a real regression, not a start offset.
-    assert.ok(segments.length >= 3, `15 s in 6 s segments: ${segments}`);
+    // Cuts fall at stream 6 s and 12 s and the feed ends at 15 s with a keyframe every second, so no cut can land at
+    // 18 s: exactly three segments, and the first one is the segment length itself (a `segment_time` of 3 or 7 fails here).
+    assert.equal(segments.length, 3, `15 s in 6 s segments: ${segments}`);
+    const first = durationOf(path.join(dir, segments[0]));
+    assert.ok(Math.abs(first - 6) <= 0.5, `the first segment is ${first} s, not 6`);
     assert.ok(readings.length >= 140 && readings.length <= 155, `${readings.length} loudness lines for 15 s`);
     // keyed by second as the tick feed keys them (stream time here, the clock live)
     const series = new SecondBuckets();

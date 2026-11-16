@@ -492,6 +492,25 @@ test("a Kick channel whose API answers 403 stops the start: kick refused: 403, e
   }
 });
 
+test("a Kick channel API that never answers: kick lookup timed out, exit 2, status failed, no capture", { timeout: 60000 }, async () => {
+  const work = await tmp("kickhang");
+  const home = path.join(work, "home");
+  try {
+    const env = {
+      BOQO_HOME: home,
+      BOQO_SNIPER_SOURCE: JSON.stringify([process.execPath, "-e", 'require("node:fs").writeFileSync(process.argv[1], "ran")', path.join(work, "capture-ran")]),
+      BOQO_SNIPER_TEST_LIVE: "1",
+      BOQO_SNIPER_TEST_KICK_HANG: "1",
+      BOQO_SNIPER_KICK_LOOKUP_MS: "300",
+    };
+    const r = await run(WATCH, ["kick:xqc"], env);
+    await assertFailed(r, await onlySession(home, "kick:xqc"), "kick:xqc", env, /^kick lookup timed out$/, 2);
+    await assert.rejects(fs.access(path.join(work, "capture-ran")), "the capture never started");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
 test(
   "a stalled source that ignores SIGTERM is killed hard and the watcher moves on",
   { timeout: 90000, skip: process.platform === "win32" ? "taskkill /F is already a hard kill" : false },

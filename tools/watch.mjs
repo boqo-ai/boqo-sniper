@@ -15,8 +15,8 @@
 //   status.json  watch.pid   `stop` is written by stop.mjs
 //
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
-// offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} and exit 2 when Kick's channel
-// API answers anything but 200 (its chat cannot start; Kick sits behind Cloudflare). Stderr is for humans. A run that
+// offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} or {"error": "kick lookup timed out"} and exit 2 when
+// Kick's channel API answers anything but 200, or not within 15 s (its chat cannot start; Kick sits behind Cloudflare). Stderr is for humans. A run that
 // fails after its session folder exists also leaves status.json at
 // {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
@@ -66,7 +66,7 @@ import path from "node:path";
 import { createMomentDetector } from "../lib/boqo/moments.mjs";
 import { signalLine } from "../lib/boqo/signal-line.mjs";
 import { createTickFeed } from "../lib/ticks.mjs";
-import { KickRefused, startChat } from "../lib/chat.mjs";
+import { KICK_LOOKUP_TIMEOUT_MS, KickLookupTimeout, KickRefused, startChat } from "../lib/chat.mjs";
 import { streamChannelLabel, streamUrl } from "../lib/boqo/stream.mjs";
 import {
   cleanupSession,
@@ -905,7 +905,10 @@ async function main() {
   } else {
     // tests: BOQO_SNIPER_TEST_KICK_STATUS=<n> makes Kick's channel API answer with that status
     const testKick = process.env.BOQO_SNIPER_TEST_KICK_STATUS;
-    const fetchImpl = testKick
+    // BOQO_SNIPER_TEST_KICK_HANG=1: the channel API never answers; BOQO_SNIPER_KICK_LOOKUP_MS shortens the 15 s wait
+    const fetchImpl = process.env.BOQO_SNIPER_TEST_KICK_HANG === "1"
+      ? () => new Promise(() => {})
+      : testKick
       ? async () => ({ status: Number(testKick), ok: Number(testKick) === 200, json: async () => ({ chatroom: { id: 1 } }) })
       : globalThis.fetch;
     try {
@@ -915,11 +918,12 @@ async function main() {
         onMessage: onChat,
         onOpenChange: (open) => onChatState(open ? "open" : "connecting"),
         fetch: fetchImpl,
+        lookupTimeoutMs: envNumber("BOQO_SNIPER_KICK_LOOKUP_MS", KICK_LOOKUP_TIMEOUT_MS),
       });
     } catch (err) {
-      // Kick answered the channel lookup with something but 200: no chatroom to join, so no chat for the whole
-      // watch. Say so now, in one line, and stop; the person decides (Kick sits behind Cloudflare).
-      if (err instanceof KickRefused) await failSession(err.message, 2);
+      // Kick answered the channel lookup with something but 200, or not at all in time: no chatroom to join, so no
+      // chat for the whole watch. Say so now, in one line, and stop; the person decides (Kick sits behind Cloudflare).
+      if (err instanceof KickRefused || err instanceof KickLookupTimeout) await failSession(err.message, 2);
       throw err;
     }
   }

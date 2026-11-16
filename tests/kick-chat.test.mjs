@@ -14,7 +14,7 @@ import {
   pongFrame,
   subscribeFrame,
 } from "../lib/boqo/kick-chat.mjs";
-import { KickRefused, startChat } from "../lib/chat.mjs";
+import { KickLookupTimeout, KickRefused, startChat } from "../lib/chat.mjs";
 import { expectGolden } from "./helpers/golden.mjs";
 
 const input = (name) =>
@@ -102,6 +102,29 @@ test("a 403 from the channel API rejects startChat with KickRefused(403), and no
   assert.equal(f.calls[0].url, "https://kick.com/api/v2/channels/xqc");
   assert.match(f.calls[0].init.headers["user-agent"] ?? f.calls[0].init.headers["User-Agent"], /^Mozilla\/5\.0/);
   assert.equal(s.sockets.length, 0);
+});
+
+test("a channel lookup that never answers rejects startChat with KickLookupTimeout: kick lookup timed out, no socket", async () => {
+  const s = fakeSockets();
+  let signal = null;
+  // never resolves, and never looks at its signal: the timeout must not depend on fetch cooperating
+  const fetch = (url, init) => {
+    signal = init.signal;
+    return new Promise(() => {});
+  };
+  const t0 = Date.now();
+  await assert.rejects(
+    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch, WebSocket: s.FakeWS, lookupTimeoutMs: 60 }),
+    (err) => err instanceof KickLookupTimeout && err.message === "kick lookup timed out",
+  );
+  assert.ok(Date.now() - t0 >= 55 && Date.now() - t0 < 1500, `rejected after ${Date.now() - t0} ms`);
+  assert.equal(signal.aborted, true, "the request is aborted too");
+  assert.equal(s.sockets.length, 0);
+});
+
+test("the default lookup timeout is hosted's 15 s", async () => {
+  const { KICK_LOOKUP_TIMEOUT_MS } = await import("../lib/chat.mjs");
+  assert.equal(KICK_LOOKUP_TIMEOUT_MS, 15000);
 });
 
 test("the chat opens on the subscription's confirmation, counts messages, and answers a ping", async () => {
