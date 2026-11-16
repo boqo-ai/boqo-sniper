@@ -1,0 +1,363 @@
+{
+  "platforms": [
+    "twitch",
+    "kick"
+  ],
+  "parsed": [
+    {
+      "text": "twitch.tv/xqc",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "https://www.twitch.tv/XQC/",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "http://m.twitch.tv/xqc?foo=1",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "twitch:xqc",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "TWITCH:XQC",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "kick.com/x-q_c",
+      "channel": {
+        "platform": "kick",
+        "channel": "x-q_c",
+        "label": "kick.com/x-q_c",
+        "url": "https://kick.com/x-q_c"
+      }
+    },
+    {
+      "text": "https://kick.com/XQC",
+      "channel": {
+        "platform": "kick",
+        "channel": "xqc",
+        "label": "kick.com/xqc",
+        "url": "https://kick.com/xqc"
+      }
+    },
+    {
+      "text": "www.kick.com/xqc/",
+      "channel": {
+        "platform": "kick",
+        "channel": "xqc",
+        "label": "kick.com/xqc",
+        "url": "https://kick.com/xqc"
+      }
+    },
+    {
+      "text": "kick:xqc",
+      "channel": {
+        "platform": "kick",
+        "channel": "xqc",
+        "label": "kick.com/xqc",
+        "url": "https://kick.com/xqc"
+      }
+    },
+    {
+      "text": "kick:x-q_c",
+      "channel": {
+        "platform": "kick",
+        "channel": "x-q_c",
+        "label": "kick.com/x-q_c",
+        "url": "https://kick.com/x-q_c"
+      }
+    },
+    {
+      "text": "KICK:X-Q_C",
+      "channel": {
+        "platform": "kick",
+        "channel": "x-q_c",
+        "label": "kick.com/x-q_c",
+        "url": "https://kick.com/x-q_c"
+      }
+    },
+    {
+      "text": "kick.com/xqc?clip=clip_01ABC",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/xqc?clip=Foo",
+      "channel": null
+    },
+    {
+      "text": "https://kick.com/xqc?clip=",
+      "channel": null
+    },
+    {
+      "text": "  twitch.tv/xqc  ",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "Kick.com/Some_Slug-1",
+      "channel": {
+        "platform": "kick",
+        "channel": "some_slug-1",
+        "label": "kick.com/some_slug-1",
+        "url": "https://kick.com/some_slug-1"
+      }
+    },
+    {
+      "text": "kick.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": {
+        "platform": "kick",
+        "channel": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "label": "kick.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "url": "https://kick.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "text": "kick.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": null
+    },
+    {
+      "text": "kick:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": null
+    },
+    {
+      "text": "kick.com/a",
+      "channel": {
+        "platform": "kick",
+        "channel": "a",
+        "label": "kick.com/a",
+        "url": "https://kick.com/a"
+      }
+    },
+    {
+      "text": "kick:a",
+      "channel": {
+        "platform": "kick",
+        "channel": "a",
+        "label": "kick.com/a",
+        "url": "https://kick.com/a"
+      }
+    },
+    {
+      "text": "twitch.tv/ab",
+      "channel": null
+    },
+    {
+      "text": "twitch:ab",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/abc",
+      "channel": {
+        "platform": "twitch",
+        "channel": "abc",
+        "label": "twitch.tv/abc",
+        "url": "https://www.twitch.tv/abc"
+      }
+    },
+    {
+      "text": "twitch.tv/aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": {
+        "platform": "twitch",
+        "channel": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+        "label": "twitch.tv/aaaaaaaaaaaaaaaaaaaaaaaaa",
+        "url": "https://www.twitch.tv/aaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "text": "twitch.tv/aaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/x-q",
+      "channel": null
+    },
+    {
+      "text": "twitch:x-q",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/videos/123",
+      "channel": null
+    },
+    {
+      "text": "kick.com/xqc/videos",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/xqc/clip/abc",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv",
+      "channel": null
+    },
+    {
+      "text": "kick.com",
+      "channel": null
+    },
+    {
+      "text": "kick:",
+      "channel": null
+    },
+    {
+      "text": "twitch:",
+      "channel": null
+    },
+    {
+      "text": "",
+      "channel": null
+    },
+    {
+      "text": "   ",
+      "channel": null
+    },
+    {
+      "text": "xqc",
+      "channel": null
+    },
+    {
+      "text": "https://youtube.com/xqc",
+      "channel": null
+    },
+    {
+      "text": "ftp://twitch.tv/xqc",
+      "channel": null
+    },
+    {
+      "text": "https://twitch.tv/xqc#frag",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "text": "kick.com/x q",
+      "channel": null
+    },
+    {
+      "text": "kick:x/y",
+      "channel": null
+    },
+    {
+      "text": "https://clips.twitch.tv/xqc",
+      "channel": null
+    },
+    {
+      "text": "https://example.com/kick.com/xqc",
+      "channel": null
+    },
+    {
+      "text": "twitch.tv/xq%20c",
+      "channel": null
+    },
+    {
+      "text": "kick.com/ü",
+      "channel": null
+    }
+  ],
+  "named": [
+    {
+      "platform": "twitch",
+      "name": "xqc",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "platform": "Kick",
+      "name": "X-Q_C",
+      "channel": {
+        "platform": "Kick",
+        "channel": "x-q_c",
+        "label": "kick.com/x-q_c",
+        "url": "https://kick.com/x-q_c"
+      }
+    },
+    {
+      "platform": "kick",
+      "name": "xqc",
+      "channel": {
+        "platform": "kick",
+        "channel": "xqc",
+        "label": "kick.com/xqc",
+        "url": "https://kick.com/xqc"
+      }
+    },
+    {
+      "platform": "twitch",
+      "name": "XQC",
+      "channel": {
+        "platform": "twitch",
+        "channel": "xqc",
+        "label": "twitch.tv/xqc",
+        "url": "https://www.twitch.tv/xqc"
+      }
+    },
+    {
+      "platform": "twitch",
+      "name": "ab",
+      "channel": null
+    },
+    {
+      "platform": "kick",
+      "name": "",
+      "channel": null
+    },
+    {
+      "platform": "kick",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": null
+    },
+    {
+      "platform": "twitch",
+      "name": "x-q",
+      "channel": null
+    },
+    {
+      "platform": "kick",
+      "name": "Some_Slug-1",
+      "channel": {
+        "platform": "kick",
+        "channel": "some_slug-1",
+        "label": "kick.com/some_slug-1",
+        "url": "https://kick.com/some_slug-1"
+      }
+    }
+  ]
+}
