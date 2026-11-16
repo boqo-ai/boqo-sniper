@@ -9,11 +9,15 @@ import { sessionFolder, stamp } from "../lib/session.mjs";
 import { segmentName } from "../lib/buffer.mjs";
 import { toolEnv } from "../engine/env.mjs";
 import { EwmaStat } from "../lib/boqo/moments.mjs";
+import { renderClip } from "../engine/render.mjs";
+import { segmentsFromWords } from "../engine/segments.mjs";
+import { startMoment, stepMoment } from "../lib/moment-run.mjs";
 
 const WATCH = fileURLToPath(new URL("../tools/watch.mjs", import.meta.url));
 const STOP = fileURLToPath(new URL("../tools/stop.mjs", import.meta.url));
 const STATUS = fileURLToPath(new URL("../tools/status.mjs", import.meta.url));
 const NEXT = fileURLToPath(new URL("../tools/next.mjs", import.meta.url));
+const MOMENT = fileURLToPath(new URL("../tools/moment.mjs", import.meta.url));
 
 async function tmp(label) {
   return fs.mkdtemp(path.join(os.tmpdir(), `sniper-${label}-`));
@@ -985,3 +989,149 @@ test("`--clip-now` says why nothing will be cut: low disk, an empty buffer, a st
     await fs.rm(work, { recursive: true, force: true });
   }
 });
+
+// ---- the whole path, offline: a 10-minute stream to the kept clips ----------------------------------------------------
+
+/** `count` six-second 640x360 .ts segments of lavfi video and a tone (a stream's picture is below the 480 lines the panels read needs). */
+async function makeStreamSegments(dir, count) {
+  await fs.mkdir(dir, { recursive: true });
+  const first = path.join(dir, "000.ts");
+  const r = spawnSync(
+    "ffmpeg",
+    [
+      "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25:duration=6",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+      "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-f", "mpegts", first,
+    ],
+    { encoding: "utf8", env: toolEnv() },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  for (let i = 1; i < count; i++) await fs.copyFile(first, path.join(dir, `${String(i).padStart(3, "0")}.ts`));
+}
+
+/** whisper's output, injected: a 10-word sentence every 4 s, a word every 0.4 s, over the window. */
+async function injectedWords({ run }) {
+  const words = [];
+  for (let i = 0; i * 0.4 < 299.6; i++) {
+    const t = Math.round(i * 0.4 * 100) / 100;
+    words.push({ w: i % 10 === 9 ? `word${i}.` : `word${i}`, s: t, e: Math.round((t + 0.3) * 100) / 100 });
+  }
+  await fs.writeFile(path.join(run, "words.json"), JSON.stringify(words));
+  await fs.writeFile(path.join(run, "segments.json"), JSON.stringify(segmentsFromWords(words, { source: "whisper" })));
+}
+
+const wireClip = (start, end, i) => ({
+  start_sec: start, end_sec: end, title: `Clip ${i}`, hook: `Hook ${i}`, score: 90 - i * 5, hook_score: 80, flow_score: 80,
+  standalone_score: 80, value_score: 80, emphasis_words: ["word"], stands_alone: true, claim: "A claim.", bridge_from_sec: null,
+  context_line: null, title_alternatives: [`First ${i}`, `Second ${i}`],
+});
+
+const STRANGER_ANSWER = {
+  hook_type: "visual_action", hook_text: "word word", hook_promises_payoff: true, time_to_payoff_s: 5,
+  narrative_arc: "setup_tension_payoff", ends_with: "punchline_or_payoff", comprehensible_without_context: 4,
+  share_trigger: "awe_or_surprise", comment_bait: false, caption_style: "word_by_word_highlight",
+  caption_position: "lower_third", title_card_or_headline: true, on_screen_text_other: false, broll_or_cutaways: "none",
+  layout: "gameplay_plus_cam", visible_zoom_punches_or_jumpcuts: "none", music_present_guess: "unknown",
+  emotional_peak: "awe", overall_quality_judgment: 4, one_line_why: "The play lands.",
+};
+
+test(
+  "offline end to end: a 10-minute stream, one chat burst, one moment, one request with target 5, two kept clips rendered with the presence rule",
+  { timeout: 900000 },
+  async () => {
+    const work = await tmp("e2e");
+    const home = path.join(work, "home");
+    const oldHome = process.env.BOQO_HOME;
+    process.env.BOQO_HOME = home;
+    try {
+      // 1. the replay: 100 six-second segments (600 s), chat that is ordinary but for one burst at 300 s
+      await makeStreamSegments(path.join(work, "segs"), 100);
+      await makeChat(path.join(work, "chat.jsonl"), 600, 300);
+      const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "1000", BOQO_SNIPER_MIN_FREE_MB: "1" };
+      const watch = await run(WATCH, ["e2echan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+      assert.equal(watch.code, 0, watch.stderr);
+
+      // 2. exactly one moment, a window of about 300 s
+      const session = await onlySession(home, "e2echan");
+      const momentNames = await fs.readdir(path.join(session, "moments"));
+      assert.equal(momentNames.length, 1, `exactly one moment, got ${momentNames}`);
+      const moment = path.join(session, "moments", momentNames[0]);
+      const meta = JSON.parse(await fs.readFile(path.join(moment, "meta.json"), "utf8"));
+      assert.equal(meta.signal, "chat");
+      assert.equal(meta.title, 'chat spike — "POGGERS" ×35');
+      const dur = durationOf(path.join(moment, "video.mp4"));
+      assert.ok(dur > 290 && dur < 320, `window is ${dur} s`);
+
+      // 3. start: whisper (its words injected), then exactly one select-request.md, its target 5
+      const start = await startMoment({ moment, asr: injectedWords });
+      assert.equal(start.write, "selection");
+      assert.equal(start.target, 5, "a 300 s window is a target of 5");
+      assert.equal(path.basename(start.request), "select-request.md");
+      const clipsRoot = path.dirname(start.run);
+      assert.equal(path.dirname(clipsRoot), path.join(home, "boqo-sniper", "clips"));
+      const requests = (await fs.readdir(start.run)).filter((f) => f === "select-request.md");
+      assert.equal(requests.length, 1);
+      assert.match(await fs.readFile(start.request, "utf8"), /word\d/, "the request holds the injected transcript");
+
+      // 4. the agent's selection, from a fixture
+      await fs.writeFile(start.answer, JSON.stringify({ clips: [wireClip(20, 40, 1), wireClip(200, 220, 2)] }));
+
+      // 5. step. The first render is in this process, through the real render and onnxruntime, its subject rule seen;
+      //    every other step is the CLI as the skill runs it, which must end by returning (exit 0, one JSON line).
+      const rules = [];
+      const render = async (args) => {
+        rules.push(args.subjectRule);
+        return renderClip(args);
+      };
+      const asked = [];
+      let last;
+      let viaCli = 0;
+      for (let i = 0; i < 20 && !last?.done; i++) {
+        let r;
+        if (rules.length === 0) r = await stepMoment({ run: start.run, render });
+        else {
+          const c = await run(MOMENT, ["step", start.run], env);
+          assert.equal(c.code, 0, `${c.stdout}${c.stderr}`);
+          assert.equal(c.stdout.trim().split("\n").length, 1, "one JSON line on stdout");
+          r = c.json;
+          viaCli++;
+        }
+        assert.equal(r.errors, undefined, JSON.stringify(r));
+        if (!r.done) assert.equal(r.failed, undefined, JSON.stringify(r));
+        if (r.read) {
+          asked.push(`${r.read}${r.n ?? ""}`);
+          assert.equal(r.read, "stranger", "the probe and the panels read are asked of a stream's 480 lines or more, not of this one");
+          await fs.writeFile(r.answer, JSON.stringify(STRANGER_ANSWER));
+        }
+        last = r;
+      }
+      assert.ok(last?.done, "the moment ended");
+      assert.ok(viaCli >= 2, `the CLI took ${viaCli} steps`);
+      assert.deepEqual(asked, ["stranger1", "stranger2"]);
+      assert.deepEqual(rules, ["presence"], "the render the test watched used the presence rule");
+
+      // 6. the kept clips are real files, rendered 9:16, and the moment is closed
+      assert.equal(last.clips.length, 2);
+      assert.deepEqual(last.failed, []);
+      for (const c of last.clips) {
+        assert.match(path.basename(c.file), /^clip-0[12]\.mp4$/);
+        assert.ok((await fs.stat(c.file)).size > 1000, c.file);
+      }
+      const probe = spawnSync("ffmpeg", ["-hide_banner", "-i", last.clips[0].file], { encoding: "utf8", env: toolEnv() });
+      assert.match(probe.stderr, /Video: h264.*1080x1920/, "a 9:16 clip");
+      const record = JSON.parse(await fs.readFile(path.join(start.run, "clips.json"), "utf8"));
+      assert.deepEqual(record.clips.map((c) => c.rendered), [true, true]);
+      assert.deepEqual(record.clips.map((c) => c.judgment.overall), [4, 4]);
+      await assert.rejects(fs.access(path.join(moment, "video.mp4")), "the window's video goes once its clips are made");
+      assert.match(last.runsLine, / · 2 clips$/);
+      const runsMd = (await fs.readFile(path.join(home, "boqo-sniper", "runs.md"), "utf8")).trim().split("\n");
+      assert.deepEqual(runsMd, [last.runsLine]);
+    } finally {
+      if (oldHome === undefined) delete process.env.BOQO_HOME;
+      else process.env.BOQO_HOME = oldHome;
+      await fs.rm(work, { recursive: true, force: true });
+    }
+  },
+);
