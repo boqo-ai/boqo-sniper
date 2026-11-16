@@ -1,18 +1,21 @@
 // Doctor: looks at what this machine has (Node, ffmpeg with libass/ebur128 and
-// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, optionally streamlink) and
+// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, onnxruntime-node running the face model, optionally
+// streamlink) and
 // says exactly how to install what is missing, per OS. It only looks; it never
 // installs anything.
 import { spawn } from 'node:child_process';
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { MODEL_URL, findModel } from './asr.mjs';
+import { FaceModelError, loadBlazeFace } from './blazeface.mjs';
 import { boqoHome } from './brand.mjs';
 import { toolEnv } from './env.mjs';
 
 /**
- * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'streamlink',
- *             ok: boolean, detail: string, required: boolean }} Check
+ * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'onnxruntime'|'streamlink',
+ *             ok: boolean, detail: string, required: boolean, cause?: 'not-installed'|'model'|'runtime' }} Check
+ * (`cause` only on a failed onnxruntime check.)
  */
 
 export const MIN_YTDLP = '2026.10.26';
@@ -181,6 +184,37 @@ function checkModel(required) {
     : { name: 'whisper-model', ok: false, detail: 'no ggml model found', required };
 }
 
+// The skill's own name (package.json), so a hint names the folder it was cloned into: ~/.boqo-clips,
+// ~/.boqo-channel or ~/.boqo-sniper (this file is shared by all three).
+const SKILL = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name || 'boqo-clips';
+  } catch {
+    return 'boqo-clips';
+  }
+})();
+
+/**
+ * onnxruntime-node loads, the face model's checksum matches, and one blank image runs through it (engine/blazeface.mjs
+ * `loadBlazeFace`). Without it the render still runs and frames every shot Fit; required all the same, because the
+ * framing is the point of a vertical clip. `load` is injectable for tests.
+ *
+ * A failed check carries `cause`, from loadBlazeFace's own error code (never from onnxruntime's wording), for the
+ * hint: 'not-installed' (ORT_NOT_INSTALLED), 'model' (MODEL_MISSING, MODEL_CHECKSUM), else 'runtime'.
+ */
+async function checkOnnx(load) {
+  const name = 'onnxruntime';
+  try {
+    const detector = await loadBlazeFace(load ? { load } : {});
+    await detector.release();
+    return { name, ok: true, detail: 'onnxruntime-node runs the face model', required: true };
+  } catch (e) {
+    const code = e instanceof FaceModelError ? e.code : null;
+    const cause = code === 'ORT_NOT_INSTALLED' ? 'not-installed' : code === 'MODEL_MISSING' || code === 'MODEL_CHECKSUM' ? 'model' : 'runtime';
+    return { name, ok: false, detail: String(e?.message ?? e).split('\n')[0], required: true, cause };
+  }
+}
+
 async function checkStreamlink(env) {
   const path = locate(env, 'streamlink');
   if (!path) return { name: 'streamlink', ok: false, detail: 'not found on PATH', required: false };
@@ -193,21 +227,23 @@ async function checkStreamlink(env) {
 /**
  * Look at the machine. Never installs anything. The tools are looked for and
  * run with `o.env` (default `toolEnv()`, which finds macOS ffmpeg-full).
- * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv }} o
+ * `o.loadOnnx` replaces onnxruntime-node's loader (tests).
+ * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv, loadOnnx?: () => Promise<any> }} o
  * @returns {Promise<Check[]>}
  */
 export async function runChecks(o) {
   const env = o.env ?? toolEnv();
   const wr = o.whisper === 'required';
   const [ffmpeg, ffprobe] = await Promise.all([checkFfmpeg(env), checkFfprobe(env)]);
-  const [filters, https, ytdlp, whisper, streamlink] = await Promise.all([
+  const [filters, https, ytdlp, whisper, onnx, streamlink] = await Promise.all([
     checkFilters(env, ffmpeg.ok),
     checkHttps(env, ffmpeg.ok),
     checkYtDlp(env),
     checkWhisper(env, wr),
+    checkOnnx(o.loadOnnx),
     o.streamlink ? checkStreamlink(env) : null,
   ]);
-  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), ...(streamlink ? [streamlink] : [])];
+  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), onnx, ...(streamlink ? [streamlink] : [])];
 }
 
 /** True when every required check passed. */
@@ -302,6 +338,19 @@ export function hintsFor(failed, platform) {
       case 'whisper-model':
         lines.push(`whisper-model: download ${MODEL_URL} into ${modelDir()}`);
         break;
+      case 'onnxruntime': {
+        // Windows PowerShell 5.1 has no `&&`; `;` separates two commands in PowerShell and in Git Bash alike.
+        const npm = `\`cd "$HOME/.${SKILL}"${p === 'win32' ? ';' : ' &&'} npm ci --omit=dev --ignore-scripts\``;
+        if (c.cause === 'not-installed') lines.push(`onnxruntime: the skill's packages are not installed: ${npm}`);
+        else if (c.cause === 'model') {
+          lines.push(`onnxruntime: ${c.detail}; reinstall the skill (https://github.com/boqo-ai/${SKILL}), its copy of the model is damaged`);
+        } else if (p === 'win32') {
+          lines.push(
+            `onnxruntime: ${c.detail}; install the Microsoft Visual C++ 2019 or newer redistributable, https://aka.ms/vs/17/release/vc_redist.x64.exe (Arm: vc_redist.arm64.exe)`,
+          );
+        } else lines.push(`onnxruntime: ${c.detail}; reinstall the skill's packages: ${npm} (x64 or arm64 only)`);
+        break;
+      }
       case 'streamlink':
         installs = true;
         if (p === 'darwin') lines.push('streamlink: `brew install streamlink`');

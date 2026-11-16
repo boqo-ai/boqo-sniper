@@ -38,4 +38,9 @@ async function main(argv) {
   for (const h of hints) process.stderr.write(h + '\n');
 }
 
-main(process.argv.slice(2)).catch((err) => fail(err.message));
+// A crash after the checks ran ends by itself, with process.exitCode: once onnxruntime-node is loaded, process.exit()
+// aborts the process on macOS (tools/render.mjs has the measurement). `fail` above runs before any check, so it may exit.
+main(process.argv.slice(2)).catch((err) => {
+  process.stdout.write(JSON.stringify({ error: err.message }) + '\n');
+  process.exitCode = 1;
+});

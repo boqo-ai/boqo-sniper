@@ -20,7 +20,7 @@
 //   nothing else on stdout. Only derived numbers go into a case's input and
 //   output: never a real video's media, transcript text or frames.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -38,6 +38,13 @@ if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) die(`bad case name: ${name}`);
 const boqo = resolve(values.boqo);
 const worker = join(boqo, 'apps/worker');
 if (!existsSync(join(worker, 'package.json'))) die(`${boqo} has no apps/worker: pass a boqo checkout (the parity worktree at the pin)`);
+// A golden is only ever the pinned boqo's: refuse a checkout that has drifted.
+const pin = readFileSync(join(root, 'engine/boqo/PIN'), 'utf8').split('\n')[0].trim();
+const head = spawnSync('git', ['-C', boqo, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+const headSha = head.status === 0 ? head.stdout.trim() : '';
+if (!pin || !headSha.startsWith(pin)) {
+  die(`${boqo} is at ${headSha ? headSha.slice(0, 9) : 'no commit'}, PIN is ${pin || 'empty'}: check out the pin (the parity worktree) first`);
+}
 const caseFile = join(root, 'scripts/parity/cases', `${name}.ts`);
 if (!existsSync(caseFile)) die(`no case file: ${caseFile}`);
 const input = resolve(values.input ?? join(root, 'tests/fixtures/parity', `${name}.input.json`));

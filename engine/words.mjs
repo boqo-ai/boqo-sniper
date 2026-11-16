@@ -241,12 +241,30 @@ function spreadStacked(words) {
 // a word's start back into the silence before it (captions came ~8 s early).
 const longestWordSec = (text) => Math.min(1.2, 0.25 + 0.09 * [...text].length);
 
+// whisper decodes in 30 s windows and, where two meet, sometimes hears a lone
+// "Oh" in the seam. A word that starts within WINDOW_EDGE_MS of a window edge
+// (the audio's own start is no seam) and has no other word within
+// WINDOW_NEIGHBOUR_MS, edge to edge, is that artefact. `ms` are whisper's raw
+// offsets, so the grid is the audio's, whatever the cut offset.
+const WINDOW_MS = 30000;
+const WINDOW_EDGE_MS = 300;
+const WINDOW_NEIGHBOUR_MS = 1000;
+
+function dropLoneEdgeWords(items) {
+  return items.filter((it, i) => {
+    const d = it.from % WINDOW_MS;
+    const atSeam = (it.from >= WINDOW_MS && d < WINDOW_EDGE_MS) || d > WINDOW_MS - WINDOW_EDGE_MS;
+    if (!atSeam) return true;
+    return items.some((o, j) => j !== i && o.from - it.to <= WINDOW_NEIGHBOUR_MS && it.from - o.to <= WINDOW_NEIGHBOUR_MS);
+  });
+}
+
 /**
  * Words from whisper.cpp `-oj` JSON (`offsets` are milliseconds). Non-speech
  * items (`[BLANK_AUDIO]`, `(music)`, `♪`) and sound tags split across items
  * (`(upbeat` + `music)`) are dropped. A word's start is pulled to at most
  * min(1.2, 0.25 + 0.09 x its characters) seconds before its end. Words stacked
- * on one timestamp are spread out.
+ * on one timestamp are spread out. A lone word at a 30 s window seam is dropped.
  * @param {object} j parsed whisper JSON
  * @param {number} [offsetSec] added to every time, for a cut that starts later
  * @returns {Word[]}
@@ -261,7 +279,7 @@ export function wordsFromWhisper(j, offsetSec = 0) {
     if (!text || from === null || to === null) continue;
     kept.push({ text, from, to });
   }
-  const out = dropNonSpeech(kept, (x) => x.text).map(({ text, from, to }) => {
+  const out = dropLoneEdgeWords(dropNonSpeech(kept, (x) => x.text)).map(({ text, from, to }) => {
     const start = offsetSec + from / 1000;
     const end = offsetSec + to / 1000;
     const s = round3(Math.max(start, end - longestWordSec(text)));

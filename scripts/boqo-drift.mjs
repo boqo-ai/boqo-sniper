@@ -4,7 +4,11 @@
 //     // ported from boqo-ai/boqo <path> @ <pin>; ...     (engine/boqo/, lib/boqo/)
 //     <!-- ported from boqo-ai/boqo <path> @ <pin>; ... -->   (skills/**/*.md)
 //   compares the blob at engine/boqo/PIN with the blob at <rev> (default HEAD)
-//   in the checkout, and prints "<path> changed" for each difference.
+//   in the checkout, and prints "<path> changed" for each difference, and
+//   "<path> pinned at <sha>, PIN is <sha>" for a header naming another sha than
+//   engine/boqo/PIN. Headers are read in engine/ (every .mjs), lib/boqo/ and
+//   skills/. "scanned N sources" goes to stderr, so a run that found nothing to
+//   check shows it.
 //   Exit 0: nothing changed. Exit 1: something changed (port it and move the
 //   pin, or record the lag in the release notes). Exit 2: it could not decide
 //   (bad usage, no git, unknown pin or ref, a header naming a path absent at
@@ -15,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const HEADER = /^(?:\/\/|<!--) ported from boqo-ai\/boqo (\S+) @ [0-9a-f]+;/gm;
+const HEADER = /^(?:\/\/|<!--) ported from boqo-ai\/boqo (\S+) @ ([0-9a-f]+);/gm;
 
 const die = (msg) => {
   process.stderr.write(`boqo-drift: ${msg}\n`);
@@ -53,15 +57,20 @@ for (const rev of [pin, ref]) {
   if (git('rev-parse', '--verify', '--quiet', `${rev}^{commit}`).status !== 0) die(`no such commit in ${checkout}: ${rev}`);
 }
 
-const sources = new Set();
-const scan = [
+const sources = new Map(); // boqo path -> the shas its headers name
+const scan = new Set([
   ...files(join(root, 'engine/boqo'), (n) => n !== 'PIN'),
+  ...files(join(root, 'engine'), (n) => n.endsWith('.mjs')),
   ...files(join(root, 'lib/boqo'), () => true),
   ...files(join(root, 'skills'), (n) => n.endsWith('.md')),
-];
+]);
 for (const f of scan) {
-  for (const m of readFileSync(f, 'utf8').matchAll(HEADER)) sources.add(m[1]);
+  for (const m of readFileSync(f, 'utf8').matchAll(HEADER)) {
+    if (!sources.has(m[1])) sources.set(m[1], new Set());
+    sources.get(m[1]).add(m[2]);
+  }
 }
+process.stderr.write(`scanned ${sources.size} sources\n`);
 
 const blob = (rev, path) => {
   const r = git('rev-parse', '--verify', '--quiet', `${rev}:${path}`);
@@ -69,7 +78,12 @@ const blob = (rev, path) => {
 };
 
 let changed = 0;
-for (const path of [...sources].sort()) {
+for (const path of [...sources.keys()].sort()) {
+  for (const sha of [...sources.get(path)].sort()) {
+    if (pin.startsWith(sha) || sha.startsWith(pin)) continue;
+    process.stdout.write(`${path} pinned at ${sha}, PIN is ${pin}\n`);
+    changed++;
+  }
   const atPin = blob(pin, path);
   if (atPin === null) die(`${path} (named in a port header) does not exist at the pin ${pin}`);
   if (blob(ref, path) !== atPin) {

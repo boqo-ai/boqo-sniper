@@ -8,8 +8,8 @@
 //   Imports are NOT cut here: that is the hand edit the port task lists.
 //
 //   Types come out through node's own strip-only mode (module.stripTypeScriptTypes):
-//   it blanks each type with spaces, so every comment survives and every line
-//   keeps boqo's line number, which is what a drift review wants. esbuild
+//   it blanks each type with spaces, so every comment survives and the code
+//   stays where it was; line positions shift by the one header line. esbuild
 //   (format=esm, no bundling) is the fallback for syntax strip-only mode
 //   rejects (enum, namespace, parameter properties); esbuild drops ordinary
 //   comments, so the fallback warns and the comments must be restored by hand.

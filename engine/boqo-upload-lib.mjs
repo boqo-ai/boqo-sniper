@@ -10,6 +10,7 @@
 // characters, with `-` and `_` read as spaces.
 import { open } from "node:fs/promises";
 import { extname } from "node:path";
+import { captionFor, tagsOf } from "./boqo/post-caption.mjs";
 
 export const PART_BYTES = 33554432;
 export const MAX_BYTES = 2147483648;
@@ -161,6 +162,23 @@ export async function run(argv, deps) {
     if (command === "name") {
       return { code: 0, line: JSON.stringify({ filename: captionFilename(args.join(" ")) }) };
     }
+    if (command === "caption") {
+      // The post's words for each platform, the way hosted writes them from a clip's title and hook (engine/boqo/post-caption.mjs).
+      const t = flag(args, "--title");
+      const h = flag(t.rest, "--hook");
+      const g = flag(h.rest, "--tags");
+      if (g.rest.length > 0 || typeof t.value !== "string") return fail("usage: caption --title <title> [--hook <hook>] [--tags a,b]");
+      const clip = { title: t.value, hook: h.value ?? null };
+      const tags = tagsOf(g.value);
+      return {
+        code: 0,
+        line: JSON.stringify({
+          tiktok: captionFor("tiktok", clip, tags),
+          instagram: captionFor("instagram", clip, tags),
+          youtube: captionFor("youtube", clip, tags),
+        }),
+      };
+    }
     if (command === "probe") {
       const file = args[0];
       if (!file) return fail("usage: probe <file>");
@@ -196,7 +214,7 @@ export async function run(argv, deps) {
       if (out.ok) return { code: 0, line: JSON.stringify({ ok: true, projectId: reply.projectId, parts: parts.length, bytes: out.bytes }) };
       return { code: 1, line: JSON.stringify({ ok: false, projectId: reply.projectId, partNumber: out.partNumber, status: out.status }) };
     }
-    return fail("usage: probe <file> | name <text…> | put <file> --reply <reply.json>");
+    return fail("usage: probe <file> | name <text…> | caption --title <title> [--hook <hook>] [--tags a,b] | put <file> --reply <reply.json>");
   } catch (e) {
     return fail(e?.message ?? e);
   }

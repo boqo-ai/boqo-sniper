@@ -4,6 +4,11 @@
 //   <d>/info.json, and with captions <d>/words.json and <d>/transcript.md.
 //   Prints {"id","title","duration","captions":"manual|auto|none","chunks":N}.
 //   With no captions: captions "none", chunks 0, exit 0 (offer local whisper).
+// node tools/fetch.mjs comments <url> --dir <d>
+//   Best effort: the top-level viewer comments (at most 200, top order) into
+//   <d>/comments.json for the selection request. Prints {"comments":N}, or
+//   {"comments":null} when they could not be read (comments off, a slow or
+//   refused connection); exit 0 either way.
 // node tools/fetch.mjs sections <url> --picks <picks.json> --dir <d>
 //   Downloads only the picked sections (1 s padding), one fallback to a whole
 //   download plus local cuts. Prints {"files":[{"pick","file","offset"}]} for
@@ -11,7 +16,7 @@
 // Exit 1 with {"error":"..."} on failure.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fetchInfo, fetchSections, realRun, infoArgs } from '../engine/fetch.mjs';
+import { fetchComments, fetchInfo, fetchSections, realRun, infoArgs } from '../engine/fetch.mjs';
 
 const fail = (msg) => {
   process.stdout.write(JSON.stringify({ error: msg }) + '\n');
@@ -36,7 +41,7 @@ const FLAGS = { '--dir': 'dir', '--picks': 'picks' };
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  if (cmd !== 'info' && cmd !== 'sections') fail('usage: fetch.mjs info <url> --dir <d> | fetch.mjs sections <url> --picks <picks.json> --dir <d>');
+  if (cmd !== 'info' && cmd !== 'comments' && cmd !== 'sections') fail('usage: fetch.mjs info <url> --dir <d> | fetch.mjs comments <url> --dir <d> | fetch.mjs sections <url> --picks <picks.json> --dir <d>');
   const opt = {};
   const positional = [];
   for (let i = 0; i < rest.length; i++) {
@@ -52,6 +57,12 @@ async function main(argv) {
   if (!/^https?:\/\//i.test(url)) fail('the url must start with http:// or https://');
   if (opt.dir === undefined) fail('--dir is required');
   const dir = resolve(opt.dir);
+
+  if (cmd === 'comments') {
+    const got = await fetchComments({ url, dir });
+    process.stdout.write(JSON.stringify({ comments: got === null ? null : got.count }) + '\n');
+    return;
+  }
 
   if (cmd === 'info') {
     process.stdout.write(JSON.stringify(await fetchInfo({ url, dir })) + '\n');
