@@ -10,21 +10,34 @@ import {
   parseSegmentName,
   chatWindowEnd,
   GAP_SEC,
+  SEGMENT_SEC,
+  POST_ROLL_SEC,
+  PRUNE_MARGIN_SEC,
+  WINDOW_SEC,
+  HORIZON_SEC,
 } from "../lib/buffer.mjs";
 import { createDetector } from "../lib/detector.mjs";
 
-// n-th segment opens at t0 = 1000 + 10 n
-const segs = (count, start = 1000) => Array.from({ length: count }, (_, n) => ({ n, t0: start + 10 * n }));
+test("production constants: 6 s segments, 30 s post-roll, a window plus 60 s kept", () => {
+  assert.equal(SEGMENT_SEC, 6);
+  assert.equal(POST_ROLL_SEC, 30);
+  assert.equal(PRUNE_MARGIN_SEC, 60);
+  assert.equal(WINDOW_SEC, 300);
+  assert.equal(HORIZON_SEC, 360, "windowSec + 60");
+});
+
+// n-th segment opens at t0 = 1000 + 6 n
+const segs = (count, start = 1000) => Array.from({ length: count }, (_, n) => ({ n, t0: start + 6 * n }));
 
 test("segmentsCovering: every segment that overlaps [from, to]", () => {
-  const s = segs(10); // 1000 .. 1090, the last one ends at 1100
+  const s = segs(10); // 1000 .. 1054, the last one ends at 1060
   const got = segmentsCovering(s, 1025, 1052);
-  assert.deepEqual(got.map((x) => x.t0), [1020, 1030, 1040, 1050]);
+  assert.deepEqual(got.map((x) => x.t0), [1024, 1030, 1036, 1042, 1048]);
 });
 
 test("segmentsCovering: a segment ending exactly at `from` is out, one starting exactly at `to` is in", () => {
   const s = segs(10);
-  assert.deepEqual(segmentsCovering(s, 1030, 1050).map((x) => x.t0), [1030, 1040, 1050]);
+  assert.deepEqual(segmentsCovering(s, 1030, 1048).map((x) => x.t0), [1030, 1036, 1042, 1048]);
 });
 
 test("segmentsCovering: a window outside the buffer is empty", () => {
@@ -37,35 +50,41 @@ test("segmentsCovering honours a custom segment length", () => {
   assert.deepEqual(segmentsCovering(s, 5, 6, 4).map((x) => x.n), [1]);
 });
 
-test("pruneBefore: keeps the newest 720 s, returns the older segments", () => {
-  const s = segs(80); // newest opens at 1790, ends at 1800
+test("pruneBefore: keeps the newest windowSec + 60 s, returns the older segments", () => {
+  const s = segs(80); // newest opens at 1474, ends at 1480
   const old = pruneBefore(s);
-  // keep window is [1080, 1800]; a segment that ends at or before 1080 goes
-  assert.deepEqual(old.map((x) => x.t0), Array.from({ length: 8 }, (_, i) => 1000 + 10 * i));
-  assert.equal(s.length - old.length, 72);
+  // the horizon is 1480 - 360 = 1120; a segment that ends before 1120 goes, one ending on it stays
+  assert.deepEqual(old.map((x) => x.t0), Array.from({ length: 19 }, (_, i) => 1000 + 6 * i));
+  assert.equal(s.length - old.length, 61);
+  assert.equal(s.at(old.length).t0, 1114, "the segment ending exactly on the horizon is kept");
 });
 
 test("pruneBefore: a young buffer prunes nothing; an empty one neither", () => {
-  assert.deepEqual(pruneBefore(segs(72)), []);
+  assert.deepEqual(pruneBefore(segs(60)), []);
+  assert.deepEqual(pruneBefore(segs(61)), [], "exactly on the horizon: kept");
+  assert.deepEqual(pruneBefore(segs(62)).map((x) => x.t0), [1000]);
   assert.deepEqual(pruneBefore([]), []);
 });
 
 test("pruneBefore: the horizon is a parameter", () => {
-  assert.equal(pruneBefore(segs(10), 50).length, 5);
+  assert.equal(pruneBefore(segs(10), 30).length, 4);
 });
 
-test("planCut: [peak-120, peak+30] clamped to what the buffer holds", () => {
-  const s = segs(40); // 1000 .. 1390 (ends 1400)
-  const plan = planCut(s, 1300);
-  assert.equal(plan.startAt, 1180);
-  assert.equal(plan.endAt, 1330);
-  assert.equal(plan.segments[0].t0, 1180);
-  assert.equal(plan.segments.at(-1).t0, 1330);
-  assert.equal(plan.peakOffsetSec, 120);
+test("planCut: a window of windowSec ending 30 s after the peak, clamped to what the buffer holds", () => {
+  const s = segs(100); // 1000 .. 1594 (ends 1600)
+  const plan = planCut(s, 1500);
+  assert.equal(plan.startAt, 1230, "peak + 30 - 300");
+  assert.equal(plan.endAt, 1530);
+  assert.equal(plan.segments[0].t0, 1228, "the segment that holds 1230");
+  assert.equal(plan.segments.at(-1).t0, 1528);
+  assert.equal(plan.peakOffsetSec, 272);
+  const short = planCut(s, 1500, 120);
+  assert.equal(short.startAt, 1410);
+  assert.equal(short.peakOffsetSec, 1500 - short.segments[0].t0);
 });
 
 test("planCut: a peak early in the buffer starts at the oldest segment", () => {
-  const plan = planCut(segs(40), 1050);
+  const plan = planCut(segs(100), 1050);
   assert.equal(plan.startAt, 1000);
   assert.equal(plan.segments[0].t0, 1000);
   assert.equal(plan.peakOffsetSec, 50);
@@ -77,21 +96,21 @@ test("planCut: nothing to cut from an empty buffer or a peak long gone", () => {
 });
 
 test("planCut: a gap before the peak starts the cut after it, and the peak offset counts from there", () => {
-  // 1000 .. 1190, a 20 s hole, then 1220 .. 1400
-  const s = [...segs(20), ...segs(19, 1220)];
-  const plan = planCut(s, 1300);
-  assert.equal(plan.segments[0].t0, 1220, "nothing from before the hole");
-  assert.equal(plan.startAt, 1220);
-  assert.equal(plan.segments.at(-1).t0, 1330);
-  assert.equal(plan.peakOffsetSec, 80, "the peak is 80 s into the video the kept segments make");
+  // 1000 .. 1114, a 20 s hole, then 1140 .. 1248
+  const s = [...segs(20), ...segs(19, 1140)];
+  const plan = planCut(s, 1200);
+  assert.equal(plan.segments[0].t0, 1140, "nothing from before the hole");
+  assert.equal(plan.startAt, 1140);
+  assert.equal(plan.segments.at(-1).t0, 1230, "a segment starting exactly at endAt is in");
+  assert.equal(plan.peakOffsetSec, 60, "the peak is 60 s into the video the kept segments make");
 });
 
 test("planCut: a gap after the peak ends the cut before it", () => {
-  const s = [...segs(20), ...segs(19, 1220)];
-  const plan = planCut(s, 1185);
-  assert.deepEqual([plan.segments[0].t0, plan.segments.at(-1).t0], [1060, 1190], "nothing from after the hole");
-  assert.equal(plan.endAt, 1200, "the run ends at 1200, short of the 30 s post-roll");
-  assert.equal(plan.peakOffsetSec, 125);
+  const s = [...segs(20), ...segs(19, 1140)];
+  const plan = planCut(s, 1110);
+  assert.deepEqual([plan.segments[0].t0, plan.segments.at(-1).t0], [1000, 1114], "nothing from after the hole");
+  assert.equal(plan.endAt, 1120, "the run ends at 1120, short of the 30 s post-roll");
+  assert.equal(plan.peakOffsetSec, 110);
 });
 
 test("planCut: starts up to GAP_SEC apart are one run, further apart are two", () => {
@@ -119,24 +138,24 @@ test("planCut: a live capture's jittery starts are one run, and the cut keeps it
 
 test("planCut: a new capture is a new run, however close its first start is", () => {
   const s = [
-    ...segs(10).map((x) => ({ ...x, cap: 1 })), // 1000 .. 1090
-    ...segs(10, 1100).map((x, i) => ({ ...x, n: 10 + i, cap: 2 })), // 1100 .. 1190, right after
+    ...segs(10).map((x) => ({ ...x, cap: 1 })), // 1000 .. 1054
+    ...segs(10, 1060).map((x, i) => ({ ...x, n: 10 + i, cap: 2 })), // 1060 .. 1114, right after
   ];
-  assert.deepEqual(planCut(s, 1150).segments.map((x) => x.cap), Array(9).fill(2), "nothing from the first capture");
-  assert.equal(planCut(s, 1150).peakOffsetSec, 50);
+  assert.deepEqual(planCut(s, 1110).segments.map((x) => x.cap), Array(10).fill(2), "nothing from the first capture");
+  assert.equal(planCut(s, 1110).peakOffsetSec, 50);
   assert.ok(planCut(s, 1050).segments.every((x) => x.cap === 1));
   // segments with no capture number (a replay) join by time alone
-  assert.equal(planCut(segs(20), 1150).segments.length, 16);
+  assert.equal(planCut(segs(20), 1100).segments.length, 20);
 });
 
 test("chatWindowEnd: the next segment's start, but never more than SEGMENT_SEC + 1 past this one's", () => {
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1010 }), 1010);
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1011 }), 1011);
-  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1030 }), 1011, "a 20 s hole is not this segment's chat");
-  assert.equal(chatWindowEnd({ t0: 1000 }, undefined), 1011);
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1006 }), 1006);
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1007 }), 1007);
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1030 }), 1007, "a 24 s hole is not this segment's chat");
+  assert.equal(chatWindowEnd({ t0: 1000 }, undefined), 1007);
 });
 
-test("a 20 s capture gap does not fire a moment on ordinary chat (the review's gap simulation)", () => {
+test("an 18 s capture gap does not fire a moment on ordinary chat (the review's gap simulation)", () => {
   // ~1.2 messages a second from 300 regulars, as the review simulated it
   let seed = 7;
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -146,22 +165,22 @@ test("a 20 s capture gap does not fire a moment on ordinary chat (the review's g
     for (let j = 0; j < k; j++) msgs.push({ t: t + rnd(), user: "u" + Math.floor(rnd() * 300) });
   }
   const uniq = (a, b) => new Set(msgs.filter((m) => m.t >= a && m.t < b).map((m) => m.user)).size;
-  // segment starts: every 10 s, with a 20 s hole after the one at 900
+  // segment starts: every 6 s, with an 18 s hole after the one at 900
   const starts = [];
-  for (let t = 0; t < 1800; t += t === 900 ? 30 : 10) starts.push(t);
+  for (let t = 0; t < 1800; t += t === 900 ? 24 : 6) starts.push(t);
   const run = (windowEnd) => {
     const d = createDetector({ sensitivity: 70 });
     const spikes = [];
     for (let i = 0; i < starts.length; i++) {
       const seg = { t0: starts[i] };
       const next = i + 1 < starts.length ? { t0: starts[i + 1] } : undefined;
-      const sp = d.push({ t: seg.t0 + 5, chat: 0, chatters: uniq(seg.t0, windowEnd(seg, next)), lufs: -20 + rnd() });
+      const sp = d.push({ t: seg.t0 + 3, chat: 0, chatters: uniq(seg.t0, windowEnd(seg, next)), lufs: -20 + rnd() });
       if (sp) spikes.push(sp);
     }
     return spikes;
   };
-  const unclamped = run((seg, next) => (next ? next.t0 : seg.t0 + 10));
-  assert.ok(unclamped.some((sp) => sp.peakAt === 905), "the old window (up to the next start) fires on the hole");
+  const unclamped = run((seg, next) => (next ? next.t0 : seg.t0 + 6));
+  assert.ok(unclamped.some((sp) => sp.peakAt === 903), "the old window (up to the next start) fires on the hole");
   assert.deepEqual(run(chatWindowEnd), [], "the clamped window does not");
 });
 

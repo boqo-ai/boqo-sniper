@@ -3,7 +3,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { STALL_SEC, STREAMLINK_STALL_SEC, captureCommand, chooseCapture, readConfig, stallSecFor } from "../lib/capture.mjs";
+import {
+  CAPTURE_THREADS,
+  STALL_SEC,
+  STREAMLINK_STALL_SEC,
+  captureCommand,
+  captureFfmpegArgs,
+  chooseCapture,
+  readConfig,
+  stallSecFor,
+} from "../lib/capture.mjs";
+import { spawn } from "node:child_process";
+import { toolEnv } from "../engine/env.mjs";
+import { createSecondMax, lineReader, parseLoudnessLine } from "../lib/loudness.mjs";
+import { CAPTURE_STALL_SEC } from "../lib/boqo/watch-constants.mjs";
 
 test("yt-dlp records by default, even with streamlink installed", () => {
   assert.equal(chooseCapture({}, { streamlink: true, ytdlp: true }), "yt-dlp");
@@ -33,12 +46,36 @@ test("both captures stop at 1080p; streamlink keeps 1080p60 and skips ads", () =
   assert.deepEqual(s.args.slice(-2), ["twitch.tv/chan", "best"]);
 });
 
-test("a stall is 60 s for yt-dlp and 180 s for streamlink, which goes quiet through an ad break", () => {
-  assert.equal(STALL_SEC, 60);
+test("a stall is boqo's 45 s for yt-dlp and 180 s for streamlink, which goes quiet through an ad break", () => {
+  assert.equal(CAPTURE_STALL_SEC, 45);
+  assert.equal(STALL_SEC, 45);
   assert.equal(STREAMLINK_STALL_SEC, 180);
-  assert.equal(stallSecFor("yt-dlp"), 60);
+  assert.equal(stallSecFor("yt-dlp"), 45);
   assert.equal(stallSecFor("streamlink"), 180);
-  assert.equal(stallSecFor("test-source"), 60);
+  assert.equal(stallSecFor("test-source"), 45);
+});
+
+test("captureFfmpegArgs: stdin in, 6 s segments out, and a null output with ebur128 beside it", () => {
+  const a = captureFfmpegArgs();
+  const at = (flag, from = 0) => a.indexOf(flag, from);
+  assert.equal(a[at("-i") + 1], "pipe:0");
+  assert.equal(a[at("-loglevel") + 1], "info", "the ebur128 lines come out at info");
+  assert.ok(a.includes("-nostats"));
+  // the buffer: a stream copy, segmented
+  assert.deepEqual(a.slice(at("-map"), at("-map") + 6), ["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"]);
+  assert.equal(a[at("-segment_time") + 1], "6");
+  assert.equal(a[at("-f") + 1], "segment");
+  assert.equal(a[at("-segment_format") + 1], "mpegts");
+  assert.equal(a[at("-strftime") + 1], "1");
+  assert.equal(a[at("-strftime") + 2], "seg_%Y%m%d%H%M%S.ts");
+  // the loudness output: the audio again, ebur128 with no peak measurement, nothing written
+  assert.deepEqual(a.slice(-7), ["-map", "0:a:0", "-af", "ebur128=peak=none", "-f", "null", "-"]);
+  // the thread caps are global options, so before -i
+  for (const flag of ["-threads", "-filter_threads", "-filter_complex_threads"]) {
+    assert.ok(at(flag) !== -1 && at(flag) < at("-i"), flag);
+    assert.equal(a[at(flag) + 1], String(CAPTURE_THREADS));
+  }
+  assert.equal(captureFfmpegArgs({ segmentSec: 10 })[captureFfmpegArgs({ segmentSec: 10 }).indexOf("-segment_time") + 1], "10");
 });
 
 test("readConfig: the skill's config.json, {} when it is missing or broken", async () => {
@@ -61,5 +98,48 @@ test("readConfig: the skill's config.json, {} when it is missing or broken", asy
     if (old === undefined) delete process.env.BOQO_HOME;
     else process.env.BOQO_HOME = old;
     await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the capture's ffmpeg, fed a 13 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 60000 }, async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-capture-"));
+  try {
+    // a synthetic 13 s test pattern and tone, as the source command would write it to stdout, at the speed a live
+    // stream arrives (-re): segment names are the wall-clock second they open, so a faster feed would reuse a name
+    const source = spawn(
+      "ffmpeg",
+      [
+        "-nostdin", "-hide_banner", "-loglevel", "error", "-re",
+        "-f", "lavfi", "-i", "testsrc=size=160x90:rate=25:duration=13",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=13",
+        "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts", "pipe:1",
+      ],
+      { env: toolEnv(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const ff = spawn("ffmpeg", captureFfmpegArgs(), { cwd: dir, env: { ...toolEnv(), TZ: "UTC0" }, stdio: ["pipe", "ignore", "pipe"] });
+    source.stdout.pipe(ff.stdin);
+    ff.stdin.on("error", () => {});
+    const readings = [];
+    let other = "";
+    ff.stderr.on(
+      "data",
+      lineReader((line) => {
+        const parsed = parseLoudnessLine(line);
+        if (parsed) readings.push(parsed);
+        else other += line + "\n";
+      }),
+    );
+    const code = await new Promise((resolve) => ff.on("close", resolve));
+    assert.equal(code, 0, other.slice(-500));
+    const segments = (await fs.readdir(dir)).filter((f) => /^seg_\d{14}\.ts$/.test(f)).sort();
+    assert.equal(segments.length, 3, `13 s in 6 s segments: ${segments}`);
+    assert.ok(readings.length >= 125 && readings.length <= 135, `${readings.length} loudness lines for 13 s`);
+    const series = createSecondMax();
+    for (const r of readings) series.add(r.t, r.momentary);
+    assert.ok(series.size >= 12 && series.size <= 14);
+    const steady = series.take(8); // past the 400 ms warm-up, in the middle of a steady tone
+    assert.ok(steady > -40 && steady < 0, `momentary loudness ${steady}`);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });

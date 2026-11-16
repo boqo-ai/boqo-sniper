@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// The live watcher: record a Twitch stream into a 12-minute ring buffer, read
+// The live watcher: record a Twitch stream into a 6-minute ring buffer, read
 // its chat, measure its loudness, and cut a moment folder on every spike.
 //
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
 //
 // Runs in the foreground; the agent starts it in the background and reads
 // what it writes: $BOQO_HOME/boqo-sniper/watch/<channel>/<YYYYMMDD-HHMMSS>/
-//   buf/seg_<UTC stamp>.ts   10 s segments, the newest 720 s
+//   buf/seg_<UTC stamp>.ts   6 s segments, the newest 360 s (a 300 s window and 60 s)
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
 //   status.json  watch.pid   `stop` is written by stop.mjs
 //
@@ -21,7 +21,7 @@
 // a name more than a minute away from it, which is what a build that ignores
 // TZ would produce.
 //
-// Replay (tests, CI): --replay reads pre-made .ts segments in order, 10 s
+// Replay (tests, CI): --replay reads pre-made .ts segments in order, 6 s
 // apart, or as far apart as their names say when every one is named like a
 // buffer segment (seg_<UTC stamp>.ts), so a test can leave a hole; and
 // --chat lines {"t": <seconds offset>, "user", "text", "emotes"} on a simulated
@@ -30,7 +30,7 @@
 // is stubbed: every poll says offline.
 //
 // Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
-// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 720),
+// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 360),
 // BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
 // BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_MAX_QUEUE and BOQO_SNIPER_MIN_FREE_MB (when a
 // moment is skipped), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
@@ -64,6 +64,7 @@ import {
 import {
   HORIZON_SEC,
   POST_ROLL_SEC,
+  PRUNE_MARGIN_SEC,
   SEGMENT_SEC,
   chatWindowEnd,
   concatArgs,
@@ -76,8 +77,14 @@ import {
   pruneBefore,
   segmentName,
 } from "../lib/buffer.mjs";
-import { measureLoudness } from "../lib/loudness.mjs";
-import { captureCommand as sourceCommand, chooseCapture, readConfig, stallSecFor } from "../lib/capture.mjs";
+import { createSecondMax, lineReader, measureLoudness, parseLoudnessLine } from "../lib/loudness.mjs";
+import {
+  captureCommand as sourceCommand,
+  captureFfmpegArgs,
+  chooseCapture,
+  readConfig,
+  stallSecFor,
+} from "../lib/capture.mjs";
 
 export const MAX_OFFLINE_POLLS = 10;
 /** Captures in a row that made nothing while the channel said live: the watcher fails with the capture's last words. */
@@ -258,7 +265,7 @@ async function runningWatcher(channel) {
 
 /**
  * yt-dlp, or streamlink when config.json opts in (lib/capture.mjs). Both write
- * the stream to stdout; ffmpeg copies it into 10 s segments named by the UTC
+ * the stream to stdout; ffmpeg copies it into 6 s segments named by the UTC
  * second they open. BOQO_SNIPER_SOURCE (a JSON argv) stands in for them in tests.
  */
 function captureCommand(tool, channel) {
@@ -267,15 +274,6 @@ function captureCommand(tool, channel) {
     return { cmd, args };
   }
   return sourceCommand(tool, channel);
-}
-
-function segmenterArgs() {
-  return [
-    "-hide_banner", "-loglevel", "warning",
-    "-i", "pipe:0",
-    "-c", "copy", "-f", "segment", "-segment_time", String(SEGMENT_SEC), "-reset_timestamps", "1",
-    "-strftime", "1", "seg_%Y%m%d%H%M%S.ts",
-  ];
 }
 
 /**
@@ -352,8 +350,11 @@ function signalTree(child) {
   });
 }
 
-/** Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline. */
-function startCapture(tool, channel, bufDir) {
+/**
+ * Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline.
+ * `onLoudness(momentary)` gets each of the ffmpeg's ebur128 lines (one per 100 ms) as it arrives.
+ */
+function startCapture(tool, channel, bufDir, onLoudness) {
   const { cmd, args } = captureCommand(tool, channel);
   const tail = [];
   const note = (who) => (d) => {
@@ -366,14 +367,23 @@ function startCapture(tool, channel, bufDir) {
     windowsHide: true,
     detached: process.platform !== "win32",
   });
-  const ff = spawn("ffmpeg", segmenterArgs(), {
+  const ff = spawn("ffmpeg", captureFfmpegArgs(), {
     cwd: bufDir,
     stdio: ["pipe", "ignore", "pipe"],
     env: { ...toolEnv(), TZ: "UTC0" },
     windowsHide: true,
   });
   src.stderr.on("data", note(cmd));
-  ff.stderr.on("data", note("ffmpeg"));
+  const noteFfmpeg = note("ffmpeg");
+  // a loudness line is a reading, not a diagnostic: it never reaches the tail the failure message quotes
+  ff.stderr.on(
+    "data",
+    lineReader((line) => {
+      const parsed = parseLoudnessLine(line);
+      if (parsed) onLoudness(parsed.momentary);
+      else if (line.trim() !== "") noteFfmpeg(line);
+    }),
+  );
   ff.stdin.on("error", () => {});
   src.stdout.on("error", () => {});
   src.stdout.pipe(ff.stdin);
@@ -533,6 +543,7 @@ async function main() {
   }
 
   const detector = createDetector({ sensitivity: args.sensitivity });
+  const loudness = createSecondMax(); // the loudest momentary reading of each second; the hosted detector (B2) reads it
   const segs = []; // { n, t0, name, done, cap }
   let captureNo = 0; // which capture a segment came from: a cut never joins two
   const known = new Set();
@@ -753,7 +764,8 @@ async function main() {
       } else i++;
     }
     await prune();
-    const horizonT = clock.now() - horizonSec - 60;
+    loudness.dropBefore(Math.floor(clock.now()) - PRUNE_MARGIN_SEC);
+    const horizonT = clock.now() - horizonSec - PRUNE_MARGIN_SEC;
     while (chatLog.length && chatLog[0].t < horizonT) chatLog.shift();
     await writeStatus();
   }
@@ -764,7 +776,7 @@ async function main() {
     const before = totalSegments;
     // every segment of the last capture was found by the tick after it ended
     captureNo++;
-    capture = startCapture(tool, channel, bufDir);
+    capture = startCapture(tool, channel, bufDir, (momentary) => loudness.add(clock.now(), momentary));
     let over = false;
     capture.closed.then(() => (over = true));
     // A source blocked on a dead connection neither exits nor writes: with no
