@@ -39,7 +39,8 @@ Without boqo you keep the files.
 ## Hardware
 
 - One watch per agent session. To watch two channels, open two sessions, as many as your PC carries.
-- About 1 GB of disk while live: a 12-minute buffer plus the moments waiting to be judged.
+- Disk while live: about 650 MB for the 12-minute buffer at 1080p60, plus about 140 MB for each moment waiting to be
+  judged. At most 10 wait (about 2 GB in all); past that, or with less than 3 GB free, the watcher skips new moments.
 - The capture is the stream as Twitch sends it (1080p60 on most channels), copied, never re-encoded. The CPU works
   hard only when a moment comes in: whisper and the render take a minute or two each.
 

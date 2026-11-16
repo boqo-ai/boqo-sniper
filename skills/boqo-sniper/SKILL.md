@@ -55,8 +55,9 @@ two chats, as many as the PC carries.
 - **Short messages:** what happened, what comes next. No tour of the tools unless asked.
 - **Long commands:** `next.mjs` waits up to 540 s, and whisper and render take a minute or two each on a CPU. Give
   every command in the loop up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
-- **Disk:** the watcher keeps about 700 MB of buffer while it runs, and every moment adds about 140 MB until you
-  delete its `video.mp4` (The loop, steps 4 and 6).
+- **Disk:** the watcher keeps about 650 MB of buffer while it runs (1080p60), and every moment adds about 140 MB until
+  you delete its `video.mp4` (The loop, steps 4 and 6). It does not cut a new moment while 10 wait unjudged or less
+  than 3 GB is free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`).
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
 - Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp or
   whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required` and give the person its
@@ -212,9 +213,9 @@ after a batch) does not apply. Its steps run once per session, then once per cli
 node "$HOME/.boqo-sniper/tools/stop.mjs" "<channel>"
 ```
 `{"stopped": true, …}` returns once the watcher is gone (it can take up to a minute); `{"stopped": false, …}` means
-nothing was running. Then the report. Moments the watcher had cut and you had not judged yet stay where they are
-(the next watch of the channel deletes them after a day); the report says how many. When the person says to finish them, run `next.mjs` and the
-loop on each, until it says `stopped`.
+nothing was running. Then the report. Moments the watcher had cut and you had not judged yet stay where they are,
+about 140 MB each (the next watch of the channel deletes them after a day); the report says how many. When the person
+says to finish them, run `next.mjs` and the loop on each, until it says `stopped`.
 
 **`{"stopped": …}`.** The watch is over:
 - `stopped`: after a stop;
@@ -227,13 +228,20 @@ Then:
    `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -F "| posted 1 "`), `get_project
    {projectId}`. `queued`, `processing` or `ready` is fine. `failed`: that clip will not be posted; the report names
    it with its error, the text inside the reply's `<data kind="project_error">` tag.
-2. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, any post
-   that failed (step 1), and the folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in
+2. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unjudged, moments the
+   watcher did not cut (`status.mjs`'s `skipped`: `queue`, too many waiting; `disk`, too little free), any post that
+   failed (step 1), and the folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in
    `runs.md` with `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -cF "<what>"`, `<what>`
    being `| clip `, `| skip |` and `| posted 1`. The moments are `status.mjs`'s `moments`; those left are the moments
    minus the clip and skip lines.
 3. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
-4. `offline`: offer to start again when the channel is back live.
+4. **Moments left unjudged:** offer to delete their videos (about 140 MB each). On a yes, with `<session>` written
+   out:
+   ```sh
+   for d in "<session>/moments/"*/; do [ -f "${d}judge.json" ] || rm -f "${d}video.mp4"; done
+   ```
+   Their small files stay.
+5. `offline`: offer to start again when the channel is back live.
 
 **Changing the sensitivity.** "More moments" or "fewer": the `sensitivity` in `config.json`, 30 to 95 (70 by
 default; higher catches more, and sound alone counts only from 70 up), in steps of 10. It applies to a new watch: say

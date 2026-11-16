@@ -32,7 +32,8 @@
 // Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
 // 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 720),
 // BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
-// BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
+// BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_MAX_QUEUE and BOQO_SNIPER_MIN_FREE_MB (when a
+// moment is skipped), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
 // BOQO_SNIPER_TEST_LIVE=1 (that source's channel polls live) and
 // BOQO_SNIPER_TEST_CRASH=throw|reject (a crash 300 ms in).
 //
@@ -46,16 +47,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDetector } from "../lib/detector.mjs";
 import { connectChat } from "../lib/twitch-chat.mjs";
-import { cleanupSession, newSession, stamp, sweepChannel, watcherPid, writeJsonAtomic, currentSession } from "../lib/session.mjs";
+import {
+  cleanupSession,
+  countUnclaimed,
+  currentSession,
+  freeBytes,
+  newSession,
+  stamp,
+  sweepAll,
+  watcherPid,
+  writeJsonAtomic,
+} from "../lib/session.mjs";
 import {
   HORIZON_SEC,
   POST_ROLL_SEC,
   SEGMENT_SEC,
   chatWindowEnd,
   concatArgs,
+  MAX_QUEUE,
+  MIN_FREE_BYTES,
   concatList,
   parseSegmentName,
   planCut,
+  skipCut,
   pruneBefore,
   segmentName,
 } from "../lib/buffer.mjs";
@@ -92,6 +106,7 @@ async function failSession(message) {
         since: now,
         segments: 0,
         moments: owned.moments ?? 0,
+        skipped: owned.skipped ?? { queue: 0, disk: 0 },
         chatPerSec: 0,
         updatedAt: now,
         error: message,
@@ -394,6 +409,8 @@ async function main() {
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
   const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
+  const maxQueue = envNumber("BOQO_SNIPER_MAX_QUEUE", MAX_QUEUE);
+  const minFreeBytes = envNumber("BOQO_SNIPER_MIN_FREE_MB", MIN_FREE_BYTES / 1e6) * 1e6;
 
   let tool = null;
   if (!(await hasTool("ffmpeg", "-version"))) fail("ffmpeg is not on PATH");
@@ -424,9 +441,10 @@ async function main() {
   }
   if (running) fail(`already watching ${channel} (pid ${running.pid}, ${running.dir})`);
 
-  // A watcher that was hard-killed leaves its buffer, pid and "live" status behind.
+  // A watcher that was hard-killed leaves its buffer, pid and "live" status
+  // behind, on this channel or any other.
   try {
-    await sweepChannel(channel);
+    await sweepAll();
   } catch (err) {
     console.error(`sweep of old sessions failed: ${err.message}`);
   }
@@ -439,7 +457,7 @@ async function main() {
   } catch (err) {
     fail(err.code === "EEXIST" ? `already watching ${channel} (${dir})` : err.message);
   }
-  owned = { dir, channel, moments: 0 };
+  owned = { dir, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
   // tests: BOQO_SNIPER_TEST_CRASH=throw|reject crashes the run 300 ms after its session exists
   const testCrash = process.env.BOQO_SNIPER_TEST_CRASH;
   if (testCrash === "throw" || testCrash === "reject") {
@@ -490,6 +508,7 @@ async function main() {
   const pending = []; // spikes waiting for their post-roll
   let lastDoneEnd = -Infinity;
   let moments = 0;
+  const skipped = owned.skipped; // moments not cut: { queue, disk }
   let state = "waiting";
   let since = iso(clock.now());
   let stopRequested = false;
@@ -517,6 +536,7 @@ async function main() {
         since,
         segments: segs.length,
         moments,
+        skipped,
         chatPerSec: Math.round((recent / 30) * 10) / 10,
         updatedAt: iso(now),
         ...(state === "failed" ? { error: failMessage } : {}),
@@ -606,6 +626,19 @@ async function main() {
   }
 
   async function cut(spike) {
+    // ~140 MB a moment: never more than maxQueue waiting, never under minFreeBytes free.
+    const unclaimed = await countUnclaimed(momentsDir);
+    const free = await freeBytes(dir);
+    const why = skipCut({ unclaimed, freeBytes: free }, { maxQueue, minFreeBytes });
+    if (why) {
+      skipped[why]++;
+      console.error(
+        why === "queue"
+          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} to be judged`
+          : `moment at ${iso(spike.peakAt)} skipped: only ${(free / 1e9).toFixed(1)} GB free`,
+      );
+      return;
+    }
     const plan = planCut(segs.filter((s) => s.done), spike.peakAt);
     if (!plan) {
       console.error(`spike at ${iso(spike.peakAt)} fell outside the buffer; no cut`);

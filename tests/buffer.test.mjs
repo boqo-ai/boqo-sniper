@@ -161,3 +161,17 @@ test("segment names are UTC wall-clock, no colons, and round-trip", () => {
   assert.equal(parseSegmentName("seg_000001.ts"), null);
   assert.equal(parseSegmentName("cut.txt"), null);
 });
+
+test("skipCut: a full queue or a short disk skips the moment", async () => {
+  const { skipCut, MAX_QUEUE, MIN_FREE_BYTES } = await import("../lib/buffer.mjs");
+  assert.equal(MAX_QUEUE, 10);
+  assert.equal(MIN_FREE_BYTES, 3e9);
+  assert.equal(skipCut({ unclaimed: 0, freeBytes: 50e9 }), null);
+  assert.equal(skipCut({ unclaimed: 9, freeBytes: 3e9 }), null);
+  assert.equal(skipCut({ unclaimed: 10, freeBytes: 50e9 }), "queue");
+  assert.equal(skipCut({ unclaimed: 0, freeBytes: 3e9 - 1 }), "disk");
+  assert.equal(skipCut({ unclaimed: 12, freeBytes: 0 }), "queue", "the queue is named first");
+  assert.equal(skipCut({ unclaimed: 0, freeBytes: null }), null, "free space unknown: cut");
+  assert.equal(skipCut({ unclaimed: 2, freeBytes: 50e9 }, { maxQueue: 2 }), "queue");
+  assert.equal(skipCut({ unclaimed: 0, freeBytes: 5e9 }, { minFreeBytes: 6e9 }), "disk");
+});

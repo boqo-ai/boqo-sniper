@@ -46,6 +46,15 @@ async function makeStampedSegments(dir, starts) {
 
 const range = (from, to, step = 10) => Array.from({ length: Math.ceil((to - from) / step) }, (_, i) => from + i * step);
 
+/** One message a second from 7 regulars, and a burst of 35 fans in each 10 s from every second in `bursts`. */
+async function makeChatBursts(file, seconds, bursts) {
+  const lines = [];
+  for (let t = 0; t < seconds; t++) lines.push({ t, user: `reg${t % 7}`, text: "hello", emotes: 0 });
+  for (const at of bursts) for (let i = 0; i < 35; i++) lines.push({ t: at + i * (10 / 35), user: `fan${at}-${i}`, text: "POGGERS", emotes: 1 });
+  lines.sort((a, b) => a.t - b.t);
+  await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+}
+
 /** One message a second from 7 regulars, plus a burst of 35 different users in 300-310 s. */
 async function makeChat(file, seconds, burstAt) {
   const lines = [];
@@ -107,7 +116,8 @@ test("replay: one burst makes one ~150 s moment, then 10 offline polls end the r
 
     const session = await onlySession(home, "chan_one");
     const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
-    assert.deepEqual(Object.keys(status).sort(), ["channel", "chatPerSec", "moments", "segments", "since", "state", "updatedAt"]);
+    assert.deepEqual(Object.keys(status).sort(), ["channel", "chatPerSec", "moments", "segments", "since", "skipped", "state", "updatedAt"]);
+    assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
     assert.equal(status.state, "offline");
     assert.equal(status.channel, "chan_one");
     assert.equal(status.moments, 1);
@@ -443,5 +453,55 @@ test("an uncaught exception or an unhandled rejection fails the watcher, and sta
     } finally {
       await fs.rm(work, { recursive: true, force: true });
     }
+  }
+});
+
+test("a full queue skips a new moment, and status.json counts it", { timeout: 180000 }, async () => {
+  const work = await tmp("queue");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 60);
+    await makeChatBursts(path.join(work, "chat.jsonl"), 600, [300, 500]);
+    // a queue of one: the first moment waits unclaimed, so the second is skipped
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MAX_QUEUE: "1" };
+    const r = await run(WATCH, ["queued", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /skipped: 1 moment waits to be judged/);
+    const session = await onlySession(home, "queued");
+    assert.equal((await fs.readdir(path.join(session, "moments"))).length, 1);
+    const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+    assert.equal(status.moments, 1);
+    assert.deepEqual(status.skipped, { queue: 1, disk: 0 });
+
+    // the same stream with both moments in the queue's room: two moments
+    const home2 = path.join(work, "home2");
+    const r2 = await run(WATCH, ["queued", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], {
+      ...env,
+      BOQO_HOME: home2,
+      BOQO_SNIPER_MAX_QUEUE: "10",
+    });
+    assert.equal(r2.code, 0, r2.stderr);
+    assert.equal((await fs.readdir(path.join(await onlySession(home2, "queued"), "moments"))).length, 2);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("too little free disk skips a moment, and status.json counts it", { timeout: 180000 }, async () => {
+  const work = await tmp("disk");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 40);
+    await makeChat(path.join(work, "chat.jsonl"), 400, 300);
+    // ask for an exabyte free
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MIN_FREE_MB: "1000000000000" };
+    const r = await run(WATCH, ["diskful", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /skipped: only .* free/);
+    const session = await onlySession(home, "diskful");
+    assert.deepEqual(await fs.readdir(path.join(session, "moments")), []);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8")).skipped, { queue: 0, disk: 1 });
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
   }
 });

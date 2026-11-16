@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   stamp,
+  sweepAll,
   sweepChannel,
   cleanupSession,
   watcherPid,
@@ -131,6 +132,10 @@ test("a new watcher sweeps what a hard-killed one left, and stop.mjs does the sa
   await withHome(async (home) => {
     const root = path.join(home, "boqo-sniper", "watch", "sweepy");
     const old = await leftover(root, "20200101-000000", { pid: deadPid(), moments: ["20200101-000500"] });
+    const otherChannel = await leftover(path.join(home, "boqo-sniper", "watch", "elsewhere"), "20200101-000000", {
+      pid: deadPid(),
+      moments: [stamp(new Date())],
+    });
     const env = { ...process.env, BOQO_HOME: home };
     const seg = path.join(home, "seg.ts");
     const gen = spawnSync(
@@ -147,6 +152,8 @@ test("a new watcher sweeps what a hard-killed one left, and stop.mjs does the sa
     });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(await exists(old), false, "the old session, with only an old moment, was swept away");
+    assert.deepEqual(await fs.readdir(path.join(otherChannel, "buf")), [], "another channel's dead session is swept too");
+    assert.equal(JSON.parse(await fs.readFile(path.join(otherChannel, "status.json"), "utf8")).state, "stopped");
 
     // stop.mjs on a session whose watcher is gone
     const dead = await leftover(root, "29990101-000000", { pid: deadPid() });
@@ -249,4 +256,29 @@ test("stop.mjs waits long enough for a watcher in a 45 s live check, then kills 
       w.kill("SIGKILL");
     }
   });
+});
+
+test("sweepAll sweeps every channel's dead sessions and leaves a live watcher's alone", async () => {
+  await withHome(async (home) => {
+    const watch = path.join(home, "boqo-sniper", "watch");
+    const recent = stamp(new Date(Date.now() - 3600 * 1000));
+    const child = await fakeWatcher(path.join(home, "bin"));
+    try {
+      const a = await leftover(path.join(watch, "alpha"), "20200101-000000", { pid: deadPid(), moments: [recent] });
+      const b = await leftover(path.join(watch, "beta"), "20200101-000000", { pid: deadPid() });
+      const live = await leftover(path.join(watch, "gamma"), "20200101-000000", { pid: child.pid });
+      await fs.writeFile(path.join(watch, "gamma.log"), "a log beside the channel folders");
+      await fs.mkdir(path.join(watch, "not a channel"));
+      const removed = await sweepAll();
+      assert.deepEqual(removed, [b], "beta's session had no moments left and went whole");
+      assert.deepEqual(await fs.readdir(path.join(a, "buf")), []);
+      assert.deepEqual(await fs.readdir(path.join(a, "moments")), [recent]);
+      assert.equal((await fs.readdir(path.join(live, "buf"))).length, 2, "a live watcher's session is not touched");
+      assert.equal(await exists(path.join(watch, "gamma.log")), true);
+      assert.deepEqual(await sweepAll(), [], "nothing left to sweep");
+    } finally {
+      child.kill();
+    }
+  });
+  await withHome(async () => assert.deepEqual(await sweepAll(), [], "no watch folder yet"));
 });
