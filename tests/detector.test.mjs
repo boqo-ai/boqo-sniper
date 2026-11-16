@@ -82,8 +82,8 @@ function series(seconds, override = () => ({})) {
 }
 
 /** Every candidate, and signal() after every tick. */
-function trace(ticks) {
-  const detector = createMomentDetector({ windowSec: 300, sensitivity: 70 });
+function trace(ticks, extra = {}) {
+  const detector = createMomentDetector({ windowSec: 300, sensitivity: 70, ...extra });
   const candidates = [];
   const signals = [];
   for (const t of ticks) {
@@ -160,4 +160,26 @@ test("cooldown: a second burst 40 s after a peak is not a moment, and one 50 s a
     assert.deepEqual(at50.map((c) => c.peakAt), [first[0].peakAt, sec(peak + 50)], `${kind}: 50 s after the peak is a moment`);
     assert.equal(at50[1].signal, kind);
   }
+});
+
+test("cooldown, to the second: a 4 s burst starting 40 s after a peak opens its rise at peak + 45, not at + 44", () => {
+  // 200 messages a second at peak + 40 .. + 43. The five-second chat window holds the whole burst at + 44 (its
+  // highest z) and three of its seconds at + 45, so the moment's peak lands on the first second the cooldown lets
+  // a rise open: 45 s after the last peak, to the second.
+  const first = trace(series(600, (i) => (i === 300 ? { chatCount: 200, chatTexts: Array.from({ length: 200 }, () => "NO WAY") } : {}))).candidates;
+  assert.equal(first.length, 1);
+  const peak = (first[0].peakAt - T0) / 1000;
+  const run = (extra) =>
+    trace(
+      series(600, (i) => {
+        if (i === 300) return { chatCount: 200, chatTexts: Array.from({ length: 200 }, () => "NO WAY") };
+        return burst(peak + 40, 4, 200)(i);
+      }),
+      extra,
+    ).candidates.map((c) => c.peakAt);
+
+  assert.deepEqual(run({}), [first[0].peakAt, sec(peak + 45)], "production: 45 s");
+  // controls: the same series with the cooldown one second short or long moves the peak, so the test sees it
+  assert.deepEqual(run({ cooldownSec: 44 }), [first[0].peakAt, sec(peak + 44)], "44 s would peak at + 44");
+  assert.deepEqual(run({ cooldownSec: 46 }), [first[0].peakAt, sec(peak + 46)], "46 s would peak at + 46");
 });

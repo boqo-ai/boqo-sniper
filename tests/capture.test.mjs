@@ -103,17 +103,17 @@ test("readConfig: the skill's config.json, {} when it is missing or broken", asy
   }
 });
 
-test("the capture's ffmpeg, fed a 13 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 60000 }, async () => {
+test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 60000 }, async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-capture-"));
   try {
-    // a synthetic 13 s test pattern and tone, as the source command would write it to stdout, at the speed a live
+    // a synthetic 15 s test pattern and tone, as the source command would write it to stdout, at the speed a live
     // stream arrives (-re): segment names are the wall-clock second they open, so a faster feed would reuse a name
     const source = spawn(
       "ffmpeg",
       [
         "-nostdin", "-hide_banner", "-loglevel", "error", "-re",
-        "-f", "lavfi", "-i", "testsrc=size=160x90:rate=25:duration=13",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=13",
+        "-f", "lavfi", "-i", "testsrc=size=160x90:rate=25:duration=15",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=15",
         "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts", "pipe:1",
       ],
       { env: toolEnv(), stdio: ["ignore", "pipe", "pipe"] },
@@ -134,13 +134,16 @@ test("the capture's ffmpeg, fed a 13 s stream on stdin, writes 6 s segments and 
     const code = await new Promise((resolve) => ff.on("close", resolve));
     assert.equal(code, 0, other.slice(-500));
     const segments = (await fs.readdir(dir)).filter((f) => /^seg_\d{14}\.ts$/.test(f)).sort();
-    assert.equal(segments.length, 3, `13 s in 6 s segments: ${segments}`);
-    assert.ok(readings.length >= 125 && readings.length <= 135, `${readings.length} loudness lines for 13 s`);
+    // Cuts fall at stream 6 s and 12 s, so the third segment needs a keyframe past 12 s. The feed runs 3 s beyond
+    // it (a keyframe every second), so a few frames of start offset cannot drop the cut; fewer than three
+    // segments is then a real regression, not a start offset.
+    assert.ok(segments.length >= 3, `15 s in 6 s segments: ${segments}`);
+    assert.ok(readings.length >= 140 && readings.length <= 155, `${readings.length} loudness lines for 15 s`);
     // keyed by second as the tick feed keys them (stream time here, the clock live)
     const series = new SecondBuckets();
     for (const r of readings) series.add(r.t * 1000, r.momentary);
     const seconds = new Set(readings.map((r) => Math.floor(r.t)));
-    assert.ok(seconds.size >= 12 && seconds.size <= 14);
+    assert.ok(seconds.size >= 14 && seconds.size <= 16);
     const steady = Math.max(...series.take(8)); // past the 400 ms warm-up, in the middle of a steady tone
     assert.ok(steady > -40 && steady < 0, `momentary loudness ${steady}`);
   } finally {
