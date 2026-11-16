@@ -16,6 +16,12 @@ export const SHARED = [
   'tools/asr.mjs',
   'tools/boqo-upload.mjs',
   'tools/transcript.mjs',
+  // The parity harness (engine/boqo/ is already under engine/). Files, not
+  // scripts/parity/: boqo-sniper keeps its own cases in scripts/parity/cases/.
+  'scripts/parity/golden.mjs',
+  'scripts/parity/strip.mjs',
+  'scripts/boqo-drift.mjs',
+  'tests/helpers/golden.mjs',
 ];
 
 export const ENGINE_JSON = 'engine/ENGINE.json';

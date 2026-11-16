@@ -1,7 +1,7 @@
 {
   "from": "boqo-ai/boqo-clips",
-  "commit": "5863ba9ae1a3a250c9f066b4540b5430d3d871aa",
-  "hash": "6c223b8eaffab2d444c750966ababbe8900b931651462f262796285fe223e3d0",
+  "commit": "29f86f6526c2b0464f3a2da7ae497930dec4d808",
+  "hash": "31d75f9b1d14df94091129b849622072c8c6da04abec9f6dbaa5aaf9d8ebae52",
   "files": [
     "engine/",
     "tools/doctor.mjs",
@@ -11,6 +11,14 @@
     "tools/brand.mjs",
     "tools/asr.mjs",
     "tools/boqo-upload.mjs",
-    "tools/transcript.mjs"
-  ]
+    "tools/transcript.mjs",
+    "scripts/parity/golden.mjs",
+    "scripts/parity/strip.mjs",
+    "scripts/boqo-drift.mjs",
+    "tests/helpers/golden.mjs"
+  ],
+  "deps": {
+    "zod": "^4.4.3",
+    "onnxruntime-node": "1.23.2"
+  }
 }
