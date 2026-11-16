@@ -326,3 +326,138 @@ export function wordsAround(words, around, span = AROUND_SPAN_SEC) {
   close();
   return { lines, from, to };
 }
+
+const FIND_SPAN_SEC = 60;
+const FIND_MIN_SCORE = 0.6;
+// a word pair under this similarity counts as no match at all
+const TOKEN_MIN_SIM = 0.5;
+const EPS = 1e-9;
+
+/**
+ * The tokens a phrase is compared by: its words (split at white space),
+ * lowercase, with everything but letters, digits and combining marks dropped
+ * (`Don’t,` is `dont`, `Q&A` is `qa`, `5.5` is `55`); a word with nothing
+ * left is no token.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function tokensOf(text) {
+  return String(text ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .split(/\s+/u)
+    .map((t) => t.replace(/[^\p{L}\p{N}\p{M}]+/gu, ''))
+    .filter(Boolean);
+}
+
+/** Levenshtein distance. */
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** 1 for the same token, less for a misspelling, 0 for a different word. */
+function tokenSim(a, b) {
+  if (a === b) return 1;
+  const v = 1 - editDistance(a, b) / Math.max(a.length, b.length);
+  return v >= TOKEN_MIN_SIM ? v : 0;
+}
+
+/**
+ * Where a quoted phrase is spoken: the run of words within [near - span,
+ * near + span] (from clamped at 0) that best matches the phrase's words in
+ * order, ignoring case, punctuation and apostrophes, and allowing a misspelt,
+ * missing or extra word.
+ *
+ * A window's score is its best in-order pairing of phrase words with window
+ * words (1 a pair for the same word, less for a misspelling, 0 for another
+ * word) over the longer of the two. A window opens on a word that pairs, or
+ * on as many unpaired words as the phrase has unpaired words before its first
+ * pair (a word standing where the quote's first word would be); the same at
+ * its end. The best score wins, then the window closest to `near`, then the
+ * longer window. Blank, punctuation-only and malformed words are skipped;
+ * `words` need not be sorted.
+ * @param {Word[]} words
+ * @param {string} phrase
+ * @param {number} near seconds
+ * @param {number} [span] seconds each side, default 60
+ * @returns {{ s: number, e: number, match: string, score: number } | null}
+ *   `s` the window's first word's start, `e` its last word's end, `match`
+ *   those words as written; null when no window scores 0.6 or more
+ */
+export function findPhrase(words, phrase, near, span = FIND_SPAN_SEC) {
+  const want = tokensOf(phrase);
+  if (want.length === 0) throw new Error('the phrase has no words');
+  const from = Math.max(0, near - span);
+  const to = near + span;
+  // only words with something to compare: a lone `-` or `♪` is no word
+  const list = (Array.isArray(words) ? words : [])
+    .filter((x) => x && Number.isFinite(x.s) && Number.isFinite(x.e) && typeof x.w === 'string')
+    .filter((x) => x.e > from && x.s < to && tokensOf(x.w).length > 0)
+    .sort((a, b) => a.s - b.s);
+  const toks = [];
+  list.forEach((x, wi) => {
+    for (const t of tokensOf(x.w)) toks.push({ t, wi });
+  });
+
+  const m = want.length;
+  const sim = want.map((p) => toks.map((x) => tokenSim(p, x.t)));
+  const minLen = Math.max(1, Math.ceil(m * FIND_MIN_SCORE - EPS));
+  const maxLen = Math.floor(m / FIND_MIN_SCORE + EPS);
+
+  // Does the window toks[i .. i+len) keep its edges? cols[b][a] is the best
+  // pairing of want[0..a) with the window's first b tokens.
+  const edgesOk = (cols, i, len) => {
+    let a = m;
+    let b = len;
+    const pairs = [];
+    while (a > 0 && b > 0) {
+      const v = cols[b][a];
+      const pv = sim[a - 1][i + b - 1];
+      if (pv > 0 && Math.abs(v - cols[b - 1][a - 1] - pv) <= EPS) {
+        pairs.push([a - 1, b - 1]);
+        a--;
+        b--;
+      } else if (Math.abs(v - cols[b - 1][a]) <= EPS) b--;
+      else a--;
+    }
+    if (pairs.length === 0) return false;
+    const [lastP, lastW] = pairs[0];
+    const [firstP, firstW] = pairs.at(-1);
+    return firstW <= firstP && len - 1 - lastW <= m - 1 - lastP;
+  };
+
+  let best = null;
+  for (let i = 0; i < toks.length; i++) {
+    const cols = [new Array(m + 1).fill(0)];
+    for (let j = i; j < toks.length && j - i < maxLen; j++) {
+      const prev = cols.at(-1);
+      const col = [0];
+      for (let a = 1; a <= m; a++) col[a] = Math.max(prev[a], col[a - 1], prev[a - 1] + sim[a - 1][j]);
+      cols.push(col);
+      const len = j - i + 1;
+      if (len < minLen) continue;
+      const score = col[m] / Math.max(m, len);
+      if (score < FIND_MIN_SCORE - EPS || (best && score < best.score - EPS)) continue;
+      const s = list[toks[i].wi].s;
+      const e = list[toks[j].wi].e;
+      const dist = near < s ? s - near : near > e ? near - e : 0;
+      const better =
+        !best ||
+        score > best.score + EPS ||
+        dist < best.dist - EPS ||
+        (Math.abs(dist - best.dist) <= EPS && len > best.len);
+      if (better && edgesOk(cols, i, len)) best = { score, dist, len, s, e, first: toks[i].wi, last: toks[j].wi };
+    }
+  }
+  if (!best) return null;
+  const match = list.slice(best.first, best.last + 1).map((x) => x.w.trim()).join(' ');
+  return { s: best.s, e: best.e, match, score: Math.round(best.score * 100) / 100 };
+}
