@@ -43,7 +43,7 @@ two chats, as many as the PC carries.
   On an error, tell the person in one sentence what failed, in the error's words. Do not work around a tool with
   your own capture, ffmpeg or yt-dlp commands, except the ones this file gives.
 - **Never post without the rule** in `<home>/boqo-sniper/config.json`. With `ask` (the default), every post waits
-  for the person's yes.
+  for the person's yes. `post_video` goes once per clip, never again after an unclear reply (Posting).
 - **Twitch only in this beta.** A Kick link: say Kick comes next, and stop. Any other link: say this beta watches
   Twitch only, and stop.
 - **Quiet while waiting.** A `timeout` from `next.mjs` is not news: call it again and say nothing. The person hears
@@ -79,7 +79,12 @@ two chats, as many as the PC carries.
    - `no brand kit named …`: `brand.mjs list`, and ask which.
 
    Keep the kit's `name` for `--brand`. Read `config.json`: `posting` (`"ask"`, or `{"auto": N}` with `accounts`)
-   and `sensitivity` (70 when it is missing).
+   and `sensitivity` (70 when it is missing). Then delete the upload replies an earlier session left (they hold live
+   signed URLs; one under an hour old may be another chat's, posting now):
+   ```sh
+   mkdir -p "<home>/boqo-sniper/clips"
+   find "<home>/boqo-sniper/clips" -mindepth 3 -maxdepth 3 -type f -name 'upload-*.json' -mmin +60 -delete
+   ```
 3. **Live?**
    ```sh
    yt-dlp -q --no-warnings --print is_live "https://www.twitch.tv/<channel>"
@@ -136,6 +141,15 @@ Repeat until The end.
    `{"words": 0, …}` is a moment with no speech, gameplay or music only: judge it on chat and the stills. Skip
    `moment.mjs words` in step 3 and every `--find` (`transcript.mjs` refuses an empty words file): set the edges in
    step 5 from the stills and `chatPerSec`; they stay where you put them.
+   `"englishOnly": true` is a model that hears every stream as English: when this one is not in English (its chat,
+   the channel, the person), say so once, and offer the multilingual model (about 150 MB). On a yes, then step 2
+   again, which should then give `"englishOnly": false`:
+   ```sh
+   mkdir -p "<home>/models" && curl -L -o "<home>/models/ggml-base.bin" \
+     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+   ```
+   Known limit: whisper can hear a word that is not there ("Oh") in silence at a multiple of 30 s, its window edge;
+   never set an edge on one.
 3. **Read it**, with the moment tool. Never read `chat.json` or `words.json` whole: a busy chat writes hundreds of KB.
    ```sh
    node "$HOME/.boqo-sniper/tools/moment.mjs" read "<moment>"
@@ -212,6 +226,9 @@ after a batch) does not apply. Its steps run once per session, then once per cli
   this clip goes by `ask`.
 - Each post: post.md → Each clip, with `<clips>` as its folder (the reply file goes there and is deleted after the
   upload). Keep the `projectId` from its step 4: it goes into the clip's line in `runs.md` (The loop, step 9).
+  `post_video` goes once for this clip. An unclear reply (a timeout, a dropped connection, no answer) is never sent
+  again: `list_schedule` decides, as post.md step 6 says. This clip's post there: `posted 1 <projectId>`. None:
+  `posted 0`, and tell the person it may not have gone out.
 - **A plan refusal in the middle of a session** ("Accounts and scheduling are on paid plans." from `create_upload`,
   or "Publishing needs a paid plan." from `post_video`): posting is off for the rest of the session. Say the plan
   line once; the watch and the loop go on clipping, and no clip waits for an answer. post.md's "stops them all" means
@@ -271,6 +288,7 @@ so, and offer to restart now (Stop, then Starting, step 4), which starts a fresh
 | "I'll read chat.json to see what happened" | `moment.mjs read`. The whole file is hundreds of KB |
 | "They said stop, but three moments are queued: I'll finish them" | Stop is quick. The queue waits unless they ask to finish it |
 | "Publishing needs a paid plan, so the session is over" | Posting is off; the watch and the clipping go on |
+| "`post_video` timed out, I'll call it again" | It may have posted. `list_schedule` decides; never a second `post_video` |
 | "`{"stopped": …}`, so all went well" | `failed` carries an `error`: say it, and offer to start again |
 | "A YouTube or Kick stream is close enough" | Twitch only in this beta |
 | "The watcher failed, I'll capture it myself with yt-dlp" | Say the error. The watcher is the only capture |
