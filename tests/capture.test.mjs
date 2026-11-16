@@ -12,14 +12,17 @@ import {
   chooseCapture,
   isSegmentOpening,
   readConfig,
+  readSegmentRows,
   stallSecFor,
 } from "../lib/capture.mjs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { toolEnv } from "../engine/env.mjs";
 import { lineReader, parseLoudnessLine } from "../lib/loudness.mjs";
 import { durationOf } from "../lib/moment.mjs";
 import { SecondBuckets } from "../lib/boqo/buckets.mjs";
 import { CAPTURE_STALL_SEC } from "../lib/boqo/watch-constants.mjs";
+import { parseSegmentNumber } from "../lib/buffer.mjs";
 
 test("yt-dlp records by default, even with streamlink installed", () => {
   assert.equal(chooseCapture({}, { streamlink: true, ytdlp: true }), "yt-dlp");
@@ -81,8 +84,14 @@ test("captureFfmpegArgs: stdin in, 6 s segments out, and a null output with ebur
   assert.equal(a[at("-segment_time") + 1], "6");
   assert.equal(a[at("-f") + 1], "segment");
   assert.equal(a[at("-segment_format") + 1], "mpegts");
-  assert.equal(a[at("-strftime") + 1], "1");
-  assert.equal(a[at("-strftime") + 2], "seg_%Y%m%d%H%M%S.ts");
+  // named by a counter, never the clock (a clock name is reused when a stalled stream catches up in a burst)
+  assert.ok(!a.includes("-strftime"), "no clock in the name");
+  assert.equal(a[at("-segment_start_number") + 1], "0");
+  assert.equal(captureFfmpegArgs({ startNumber: 42 })[captureFfmpegArgs({ startNumber: 42 }).indexOf("-segment_start_number") + 1], "42");
+  assert.equal(a[at("-segment_list") + 1], "segments.csv");
+  assert.equal(a[at("-segment_list_type") + 1], "csv");
+  assert.equal(a[at("-segment_list_flags") + 1], "live");
+  assert.equal(a.at(-8), "seg_%06d.ts");
   // the loudness output: the audio again, ebur128 with no peak measurement, nothing written
   assert.deepEqual(a.slice(-7), ["-map", "0:a:0", "-af", "ebur128=peak=none", "-f", "null", "-"]);
   // the thread caps are global options, so before -i
@@ -116,11 +125,48 @@ test("readConfig: the skill's config.json, {} when it is missing or broken", asy
   }
 });
 
-async function captureOnce() {
+/** A synthetic test pattern and tone of `seconds`, MPEG-TS, a keyframe a second, written to `file`. */
+function makeTs(file, seconds) {
+  const r = spawnSync(
+    "ffmpeg",
+    [
+      "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", `testsrc=size=160x90:rate=25:duration=${seconds}`,
+      "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts", file,
+    ],
+    { env: toolEnv(), encoding: "utf8" },
+  );
+  assert.equal(r.status, 0, r.stderr);
+}
+
+/** Run the production capture args in `dir` with `input` on stdin; resolves with the loudness readings and ffmpeg's other output. */
+async function runCapture(dir, input, args = {}) {
+  const ff = spawn("ffmpeg", captureFfmpegArgs(args), { cwd: dir, env: toolEnv(), stdio: ["pipe", "ignore", "pipe"] });
+  input.pipe(ff.stdin);
+  ff.stdin.on("error", () => {});
+  const readings = [];
+  let other = "";
+  ff.stderr.on(
+    "data",
+    lineReader((line) => {
+      const parsed = parseLoudnessLine(line);
+      if (parsed) readings.push(parsed);
+      else other += line + "\n";
+    }),
+  );
+  const code = await new Promise((resolve) => ff.on("close", resolve));
+  assert.equal(code, 0, other.slice(-500));
+  return { readings, other };
+}
+
+const segmentFiles = async (dir) => (await fs.readdir(dir)).filter((f) => /^seg_\d{6}\.ts$/.test(f)).sort();
+
+test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 60000 }, async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-capture-"));
   try {
     // a synthetic 15 s test pattern and tone, as the source command would write it to stdout, at the speed a live
-    // stream arrives (-re): segment names are the wall-clock second they open, so a faster feed would reuse a name
+    // stream arrives (-re)
     const source = spawn(
       "ffmpeg",
       [
@@ -131,27 +177,17 @@ async function captureOnce() {
       ],
       { env: toolEnv(), stdio: ["ignore", "pipe", "pipe"] },
     );
-    const ff = spawn("ffmpeg", captureFfmpegArgs(), { cwd: dir, env: { ...toolEnv(), TZ: "UTC0" }, stdio: ["pipe", "ignore", "pipe"] });
-    source.stdout.pipe(ff.stdin);
-    ff.stdin.on("error", () => {});
-    const readings = [];
-    let other = "";
-    ff.stderr.on(
-      "data",
-      lineReader((line) => {
-        const parsed = parseLoudnessLine(line);
-        if (parsed) readings.push(parsed);
-        else other += line + "\n";
-      }),
-    );
-    const code = await new Promise((resolve) => ff.on("close", resolve));
-    assert.equal(code, 0, other.slice(-500));
-    const segments = (await fs.readdir(dir)).filter((f) => /^seg_\d{14}\.ts$/.test(f)).sort();
+    const { readings } = await runCapture(dir, source.stdout);
+    const segments = await segmentFiles(dir);
     // Cuts fall at stream 6 s and 12 s and the feed ends at 15 s with a keyframe every second, so no cut can land at
     // 18 s: exactly three segments, and the first one is the segment length itself (a `segment_time` of 3 or 7 fails here).
     assert.equal(segments.length, 3, `15 s in 6 s segments: ${segments}`);
     const first = durationOf(path.join(dir, segments[0]));
     assert.ok(Math.abs(first - 6) <= 0.5, `the first segment is ${first} s, not 6`);
+    const { rows } = await readSegmentRows(dir, "segments.csv", 0);
+    assert.deepEqual(rows.map((r) => r.name), segments, "the list names every file, once");
+    assert.equal(rows[0].start, 0);
+    assert.ok(Math.abs(rows[0].end - 6) <= 0.5);
     assert.ok(readings.length >= 140 && readings.length <= 155, `${readings.length} loudness lines for 15 s`);
     // keyed by second as the tick feed keys them (stream time here, the clock live)
     const series = new SecondBuckets();
@@ -163,17 +199,61 @@ async function captureOnce() {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
-}
+});
 
-// One run is a real-time (-re) feed whose segments are named by the wall-clock second they open, so a runner that
-// stalls for seconds can open two within one second and overwrite a name. A real regression (the segment length, the
-// stream copy, the loudness line) fails the same way twice; a stall passes the second time. Both failures are shown.
-test("the capture's ffmpeg, fed a 15 s stream on stdin, writes 6 s segments and prints a momentary loudness every 100 ms", { timeout: 120000 }, async (t) => {
+test("a stream that arrives in a burst (60 s in about a second) loses no segment: 10 files, 10 list rows, one name each", { timeout: 60000 }, async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-burst-"));
   try {
-    await captureOnce();
-  } catch (first) {
-    t.diagnostic(`first run failed, trying once more: ${first.message}`);
-    await captureOnce();
+    const src = path.join(dir, "src.ts");
+    makeTs(src, 60);
+    const buf = path.join(dir, "buf");
+    await fs.mkdir(buf);
+    // no -re: every segment opens inside one wall-clock second, which under clock names (-strftime) was ten
+    // segments in one name, nine of them overwritten (measured 2026-11-16: 54 s lost)
+    const t0 = Date.now();
+    await runCapture(buf, createReadStream(src));
+    assert.ok(Date.now() - t0 < 30000);
+    const files = await segmentFiles(buf);
+    const { rows } = await readSegmentRows(buf, "segments.csv", 0);
+    assert.equal(files.length, 10, `${files}`);
+    assert.equal(rows.length, 10);
+    assert.deepEqual(rows.map((r) => r.name), files);
+    assert.deepEqual(files, Array.from({ length: 10 }, (_, i) => `seg_${String(i).padStart(6, "0")}.ts`));
+    // each file holds its own span: the durations add up to the 60 s fed, each row's end is the next one's start
+    let total = 0;
+    for (const f of files) total += durationOf(path.join(buf, f));
+    assert.ok(Math.abs(total - 60) <= 1.5, `${total} s in the files`);
+    for (let i = 1; i < rows.length; i++) assert.ok(Math.abs(rows[i].start - rows[i - 1].end) < 1e-6);
+    assert.ok(Math.abs(rows.at(-1).end - 60) <= 1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a capture restart continues the counter: -segment_start_number picks up after the last name, no name is reused", { timeout: 60000 }, async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sniper-restart-"));
+  try {
+    const src = path.join(dir, "src.ts");
+    makeTs(src, 20);
+    const buf = path.join(dir, "buf");
+    await fs.mkdir(buf);
+    await runCapture(buf, createReadStream(src), { listFile: "capture-1.csv" });
+    const one = await segmentFiles(buf);
+    const first = (await readSegmentRows(buf, "capture-1.csv", 0)).rows;
+    assert.equal(one.length, 4, `${one}`);
+    const next = Math.max(...one.map(parseSegmentNumber)) + 1;
+    assert.equal(next, 4);
+    const before = new Map(await Promise.all(one.map(async (f) => [f, (await fs.stat(path.join(buf, f))).size])));
+    await runCapture(buf, createReadStream(src), { startNumber: next, listFile: "capture-2.csv" });
+    const all = await segmentFiles(buf);
+    const second = (await readSegmentRows(buf, "capture-2.csv", 0)).rows;
+    assert.deepEqual(second.map((r) => r.name), ["seg_000004.ts", "seg_000005.ts", "seg_000006.ts", "seg_000007.ts"]);
+    assert.equal(all.length, 8, "eight files, none overwritten");
+    assert.equal(new Set([...first, ...second].map((r) => r.name)).size, 8);
+    for (const f of one) assert.equal((await fs.stat(path.join(buf, f))).size, before.get(f), `${f} is as the first capture left it`);
+    assert.equal(second[0].start, 0, "stream time starts over in the new capture; its own clock anchors it");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });
 

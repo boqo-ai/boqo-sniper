@@ -367,6 +367,80 @@ test("a capture that stops producing without exiting is killed and the watcher m
   }
 });
 
+/** A `seconds`-long test pattern and tone as MPEG-TS, a keyframe a second. */
+function makeTs(file, seconds) {
+  const r = spawnSync(
+    "ffmpeg",
+    [
+      "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", `testsrc=size=160x90:rate=25:duration=${seconds}`,
+      "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts", file,
+    ],
+    { encoding: "utf8", env: toolEnv() },
+  );
+  assert.equal(r.status, 0, r.stderr);
+}
+const catSource = (file) => JSON.stringify([process.execPath, "-e", 'process.stdout.write(require("node:fs").readFileSync(process.argv[1]))', file]);
+const segFiles = async (bufDir) => (await fs.readdir(bufDir)).filter((f) => /^seg_\d{6}\.ts$/.test(f)).sort();
+
+test("a source that delivers 60 s in one burst: the watcher keeps all ten segments, none overwritten", { timeout: 120000 }, async () => {
+  const work = await tmp("burst");
+  const home = path.join(work, "home");
+  try {
+    makeTs(path.join(work, "src.ts"), 60);
+    const env = {
+      BOQO_HOME: home,
+      BOQO_SNIPER_SOURCE: catSource(path.join(work, "src.ts")), // written at once, as a stalled HLS stream catching up is
+      BOQO_SNIPER_POLL_MS: "100",
+      BOQO_SNIPER_KEEP_BUF: "1",
+    };
+    const r = await run(WATCH, ["burstchan"], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "burstchan");
+    const files = await segFiles(path.join(session, "buf"));
+    assert.deepEqual(files, Array.from({ length: 10 }, (_, i) => `seg_${String(i).padStart(6, "0")}.ts`));
+    const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+    assert.equal(status.segments, 10, "the watcher counted every one");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a capture restart in a session continues the segment counter: no name is reused", { timeout: 120000 }, async () => {
+  const work = await tmp("restart");
+  const home = path.join(work, "home");
+  try {
+    makeTs(path.join(work, "src.ts"), 13); // three segments a capture: 6 s, 6 s and a short last one
+    const env = {
+      BOQO_HOME: home,
+      BOQO_SNIPER_SOURCE: catSource(path.join(work, "src.ts")), // the source ends, the channel still says live: the next capture starts
+      BOQO_SNIPER_TEST_LIVE: "1",
+      BOQO_SNIPER_POLL_MS: "50",
+      BOQO_SNIPER_KEEP_BUF: "1",
+    };
+    const watching = run(WATCH, ["restarty"], env);
+    const session = await waitForSession(home, "restarty");
+    const bufDir = path.join(session, "buf");
+    let files = [];
+    for (let i = 0; i < 300 && files.length < 9; i++) {
+      files = await segFiles(bufDir);
+      if (files.length < 9) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(files.length >= 9, `three captures' segments: ${files}`);
+    await fs.writeFile(path.join(session, "stop"), "1");
+    const done = await watching;
+    assert.equal(done.code, 0, done.stderr);
+    files = await segFiles(bufDir);
+    assert.deepEqual(files, Array.from({ length: files.length }, (_, i) => `seg_${String(i).padStart(6, "0")}.ts`), "consecutive, from 0, each once");
+    assert.ok(files.length >= 9);
+    const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+    assert.equal(status.segments, files.length);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
 test("a channel that is offline from the start also ends after 10 offline polls", { timeout: 60000 }, async () => {
   const work = await tmp("offline");
   try {

@@ -10,7 +10,7 @@
 //
 // Runs in the foreground; the agent starts it in the background and reads
 // what it writes: $BOQO_HOME/boqo-sniper/watch/<platform>-<slug>/<YYYYMMDD-HHMMSS>/
-//   buf/seg_<UTC stamp>.ts   6 s segments, the newest 360 s (a 300 s window and 60 s)
+//   buf/seg_<counter>.ts     6 s segments, the newest 360 s (a 300 s window and 60 s); capture-<n>.csv is a capture's segment list
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
 //   status.json  watch.pid   `stop` is written by stop.mjs
 //
@@ -21,11 +21,14 @@
 // {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
 // Timeline: wall-clock epoch seconds, for chat, loudness, peakAt and every
-// segment (the detector's ticks are the same clock in milliseconds). A
-// segment's start is read from its own name (ffmpeg's strftime segment names,
-// run with TZ=UTC0 so they are UTC); the file's mtime overrules a name more
-// than a minute away from it, which is what a build that ignores TZ would
-// produce.
+// segment (the detector's ticks are the same clock in milliseconds). The
+// segments are named by a counter (seg_000042.ts, continued across capture
+// restarts so no name is ever reused: a name from the clock is, when a stalled
+// stream catches up in a burst, and the newer segment overwrites the older). A
+// segment's start comes from the capture's segment list (ffmpeg's csv: name,
+// stream start, stream end, written as each segment closes) and the capture's
+// clock anchor (lib/buffer.mjs createCaptureClock): the first row's read time
+// less its end, lowered whenever a later row says the stream was nearer live.
 //
 // The detector, as hosted's session runs it: a new one for each capture
 // phase; every complete second, the raw chat messages that arrived in it, its
@@ -34,8 +37,9 @@
 // out of the chat baseline.
 //
 // Replay (tests, CI): --replay reads pre-made .ts segments in order, 6 s
-// apart, or as far apart as their names say when every one is named like a
-// buffer segment (seg_<UTC stamp>.ts), so a test can leave a hole; and
+// apart, or as far apart as their names say when every one is named by its
+// start (seg_<UTC stamp>.ts, the form v0.1 wrote), so a test can leave a hole;
+// each is copied into the buffer under the next counter name. And
 // --chat lines {"t": <seconds offset>, "user", "text", "emotes"} on a simulated
 // clock that jumps a second at a time instead of waiting
 // (BOQO_SNIPER_REPLAY_SPEED=<n> makes it n simulated seconds per real second).
@@ -90,11 +94,13 @@ import {
   MAX_QUEUE,
   MIN_FREE_BYTES,
   concatList,
+  createCaptureClock,
   parseSegmentName,
+  parseSegmentNumber,
   planCut,
   skipCut,
   pruneBefore,
-  segmentName,
+  segmentFileName,
 } from "../lib/buffer.mjs";
 import { lineReader, measureMomentary, parseLoudnessLine } from "../lib/loudness.mjs";
 import {
@@ -103,6 +109,7 @@ import {
   chooseCapture,
   isSegmentOpening,
   readConfig,
+  readSegmentRows,
   stallSecFor,
 } from "../lib/capture.mjs";
 
@@ -375,7 +382,7 @@ function signalTree(child) {
  * Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline.
  * `onLoudness(momentary)` gets each of the ffmpeg's ebur128 lines (one per 100 ms) as it arrives.
  */
-function startCapture(tool, target, bufDir, onLoudness) {
+function startCapture(tool, target, bufDir, onLoudness, { startNumber, listFile }) {
   const { cmd, args } = captureCommand(tool, target);
   const tail = [];
   const note = (who) => (d) => {
@@ -388,10 +395,10 @@ function startCapture(tool, target, bufDir, onLoudness) {
     windowsHide: true,
     detached: process.platform !== "win32",
   });
-  const ff = spawn("ffmpeg", captureFfmpegArgs(), {
+  const ff = spawn("ffmpeg", captureFfmpegArgs({ startNumber, listFile }), {
     cwd: bufDir,
     stdio: ["pipe", "ignore", "pipe"],
-    env: { ...toolEnv(), TZ: "UTC0" },
+    env: toolEnv(),
     windowsHide: true,
   });
   src.stderr.on("data", note(cmd));
@@ -572,10 +579,13 @@ async function main() {
 
   let feed = null; // this capture phase's detector and its 1 s ticks (lib/ticks.mjs)
   let chatState = replay ? "open" : "connecting"; // the chat socket's, as the client last said
-  const segs = []; // { n, t0, name, done, cap }
+  const segs = []; // { n, t0, s, name, done, cap }
   let captureNo = 0; // which capture a segment came from: a cut never joins two
-  const known = new Set();
+  const known = new Set(); // every segment name this session has used (they are never reused)
   let nextN = 0;
+  let nextSegNo = 0; // the counter in the next capture's first file name; only ever goes up
+  // the running (or last) capture's segment list: its file, how far it is read, the clock that stamps its rows
+  let list = null; // { file, offset, clock, cap }
   let totalSegments = 0;
   const chatLog = []; // { t, user, text, emotes }
   const pending = []; // moments waiting for their post-roll
@@ -586,7 +596,6 @@ async function main() {
   let since = iso(clock.now());
   let stopRequested = false;
   let lastCaptureTail = "";
-  let warnedTz = false;
   let failMessage = null;
 
   const setState = (s) => {
@@ -648,34 +657,46 @@ async function main() {
 
   // ---- finding and finishing segments ----
 
+  /** Stamp every segment of `list`'s capture from its clock: the anchor may have moved down. */
+  function restamp(cap, clockOf) {
+    for (const seg of segs) if (seg.cap === cap && seg.s !== undefined) seg.t0 = clockOf.t0(seg.s);
+    lastDoneEnd = segs.reduce((m, s2) => (s2.done ? Math.max(m, s2.t0 + SEGMENT_SEC) : m), -Infinity);
+  }
+
+  /** The rows the capture's segment list gained: each is a closed segment, kept under its own name, read once. */
   async function scanBuffer() {
-    let names;
-    try {
-      names = await fs.readdir(bufDir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (known.has(name)) continue;
-      let t0 = parseSegmentName(name);
-      if (t0 === null) continue;
-      if (!replay) {
-        try {
-          const mtime = (await fs.stat(path.join(bufDir, name))).mtimeMs / 1000;
-          if (Math.abs(mtime - t0) > 60) {
-            if (!warnedTz) console.error("segment names are not in UTC here; reading start times from file times");
-            warnedTz = true;
-            t0 = Math.floor(mtime);
-          }
-        } catch {
-          continue;
-        }
-      }
-      known.add(name);
-      segs.push({ n: nextN++, t0, name, done: false, cap: captureNo });
+    if (!list) return;
+    const { rows, offset } = await readSegmentRows(bufDir, list.file, list.offset);
+    list.offset = offset;
+    if (rows.length === 0) return;
+    const seenAt = clock.now();
+    for (const row of rows) {
+      if (known.has(row.name)) continue;
+      list.clock.observe(row, seenAt);
+      known.add(row.name);
+      segs.push({ n: nextN++, t0: 0, s: row.start, name: row.name, done: true, cap: list.cap });
       totalSegments++;
     }
+    restamp(list.cap, list.clock);
     segs.sort((a, b) => a.t0 - b.t0);
+  }
+
+  /**
+   * Before a capture: continue the counter past every file the buffer holds (so the new capture cannot open a name an
+   * earlier one used), and remove what the last capture left unlisted, a segment it was writing when it was killed.
+   */
+  async function prepareCapture() {
+    let names = [];
+    try {
+      names = await fs.readdir(bufDir);
+    } catch {}
+    for (const name of names) {
+      const n = parseSegmentNumber(name);
+      if (n !== null) {
+        nextSegNo = Math.max(nextSegNo, n + 1);
+        if (!known.has(name)) await unlinkRetry(path.join(bufDir, name));
+      } else if (/^capture-\d+\.csv$/.test(name)) await unlinkRetry(path.join(bufDir, name));
+    }
   }
 
   // ---- the detector ----
@@ -830,7 +851,12 @@ async function main() {
     // every segment of the last capture was found by the tick after it ended
     captureNo++;
     startFeed();
-    capture = startCapture(tool, target, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary));
+    await prepareCapture();
+    list = { file: `capture-${captureNo}.csv`, offset: 0, clock: createCaptureClock(), cap: captureNo };
+    capture = startCapture(tool, target, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary), {
+      startNumber: nextSegNo,
+      listFile: list.file,
+    });
     let over = false;
     capture.closed.then(() => (over = true));
     // A source blocked on a dead connection neither exits nor writes: with no
@@ -886,8 +912,14 @@ async function main() {
       await replayUntil(at);
       if (await checkStop()) return;
       feedChat(at);
-      const seg = path.join(bufDir, segmentName(at));
+      const name = segmentFileName(nextSegNo++);
+      const seg = path.join(bufDir, name);
       await fs.copyFile(path.join(args.replay, replayFiles[i]), seg);
+      // a replay has no segment list: the file's offset is its start, and it is whole at once
+      known.add(name);
+      segs.push({ n: nextN++, t0: at, name, done: false, cap: captureNo });
+      totalSegments++;
+      segs.sort((a, b) => a.t0 - b.t0);
       for (const r of await measureMomentary(seg)) feed.loudness((at + r.t) * 1000, r.momentary);
       await tick(false);
       setState("live");
@@ -982,6 +1014,10 @@ async function main() {
   setState(exitError ? "failed" : stopped ? "stopped" : "offline");
   if (!keepBuf) {
     for (const s of segs.splice(0)) await unlinkRetry(path.join(bufDir, s.name));
+    // and what the last capture left: a segment it was writing when it was killed, and its segment list
+    for (const name of await fs.readdir(bufDir).catch(() => [])) {
+      if (parseSegmentNumber(name) !== null || /^capture-\d+\.csv$/.test(name)) await unlinkRetry(path.join(bufDir, name));
+    }
   }
   await writeStatus();
   await fs.rm(path.join(dir, "watch.pid"), { force: true });

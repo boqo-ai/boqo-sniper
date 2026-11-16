@@ -8,6 +8,10 @@ import {
   concatArgs,
   segmentName,
   parseSegmentName,
+  segmentFileName,
+  parseSegmentNumber,
+  parseSegmentList,
+  createCaptureClock,
   GAP_SEC,
   SEGMENT_SEC,
   POST_ROLL_SEC,
@@ -179,4 +183,80 @@ test("skipCut: a full queue or a short disk skips the moment", async () => {
   assert.equal(skipCut({ unclaimed: 0, freeBytes: null }), null, "free space unknown: cut");
   assert.equal(skipCut({ unclaimed: 2, freeBytes: 50e9 }, { maxQueue: 2 }), "queue");
   assert.equal(skipCut({ unclaimed: 0, freeBytes: 5e9 }, { minFreeBytes: 6e9 }), "disk");
+});
+
+// ---- the buffer's names (a counter) and times (the capture's segment list) ----
+
+test("segmentFileName and parseSegmentNumber: a counter, six digits, nothing from the clock", () => {
+  assert.equal(segmentFileName(0), "seg_000000.ts");
+  assert.equal(segmentFileName(42), "seg_000042.ts");
+  assert.equal(segmentFileName(1234567), "seg_1234567.ts");
+  assert.equal(parseSegmentNumber("seg_000042.ts"), 42);
+  assert.equal(parseSegmentNumber("seg_20261116073944.ts"), 20261116073944, "a 14-digit name reads as a counter, which is why a replay's stamped names are only read by parseSegmentName");
+  assert.equal(parseSegmentNumber("seg_42.ts"), null);
+  assert.equal(parseSegmentNumber("cut-1.txt"), null);
+  assert.equal(parseSegmentNumber("capture-1.csv"), null);
+});
+
+test("parseSegmentList: whole csv lines only; a line ffmpeg is still writing, and junk, are not rows", () => {
+  const text = "seg_000007.ts,0.000000,6.023222\nseg_000008.ts,6.023222,12.023222\r\nnot a row\nseg_000009.ts,x,1\nseg_000010.ts,12.02";
+  assert.deepEqual(parseSegmentList(text), [
+    { name: "seg_000007.ts", start: 0, end: 6.023222 },
+    { name: "seg_000008.ts", start: 6.023222, end: 12.023222 },
+  ]);
+  assert.deepEqual(parseSegmentList(""), []);
+  assert.deepEqual(parseSegmentList("seg_000001.ts,0,6"), [], "no newline yet: the row is not written");
+});
+
+const row = (i, len = 6) => ({ name: segmentFileName(i), start: i * len, end: (i + 1) * len });
+
+test("createCaptureClock: read live, one row a segment, a segment's t0 is the second it opened (read time less its length)", () => {
+  const c = createCaptureClock();
+  for (let i = 0; i < 5; i++) c.observe(row(i), 1006 + 6 * i); // each row is read as its segment closes
+  for (let i = 0; i < 5; i++) assert.equal(c.t0(row(i).start), 1000 + 6 * i);
+});
+
+test("createCaptureClock: read late (a few seconds of jitter), the anchor only moves earlier, to the least-late reading", () => {
+  const c = createCaptureClock();
+  c.observe(row(0), 1009); // 3 s late
+  assert.equal(c.t0(0), 1003);
+  c.observe(row(1), 1012); // on time: the stream is 3 s nearer live than the first row said
+  assert.equal(c.t0(0), 1000);
+  c.observe(row(2), 1022); // 4 s late: no move
+  assert.equal(c.t0(0), 1000);
+  assert.equal(c.t0(row(2).start), 1012);
+});
+
+test("createCaptureClock: a 60 s backlog read in one instant is spaced by stream time, not stacked on one second", () => {
+  const c = createCaptureClock();
+  const rows = Array.from({ length: 10 }, (_, i) => row(i));
+  for (const r of rows) c.observe(r, 5000); // all ten rows are read at the same second
+  const t0s = rows.map((r) => c.t0(r.start));
+  assert.deepEqual(t0s, rows.map((_, i) => 4940 + 6 * i), "6 s apart, the last one ending at the read time");
+  assert.equal(new Set(t0s).size, 10);
+});
+
+test("a cut over segments written in a burst covers the stream span around the peak", () => {
+  // ten 6.02 s segments arrive in one instant (a stalled stream catching up); the stream's own times are the spacing
+  const len = 6.023222;
+  const rows = Array.from({ length: 10 }, (_, i) => ({ name: segmentFileName(i), start: i * len, end: (i + 1) * len }));
+  const c = createCaptureClock();
+  for (const r of rows) c.observe(r, 8000);
+  const burst = rows.map((r, n) => ({ n, name: r.name, t0: c.t0(r.start), s: r.start, cap: 1 }));
+  // the peak is 31 s into the stream; a 20 s window ending 6 s after it
+  const peakStream = 31;
+  const peakAt = burst[0].t0 + peakStream;
+  const plan = planCut(burst, peakAt, 20, 6);
+  assert.ok(plan);
+  // the window is stream [17, 37]: the segments overlapping it, contiguous, and nothing else
+  const want = rows.filter((r) => r.start < 37 && r.end > 17).map((r) => r.name);
+  assert.deepEqual(plan.segments.map((x) => x.name), want);
+  assert.deepEqual(want, ["seg_000002.ts", "seg_000003.ts", "seg_000004.ts", "seg_000005.ts", "seg_000006.ts"]);
+  const first = rows.find((r) => r.name === want[0]);
+  assert.ok(Math.abs(plan.peakOffsetSec - (peakStream - first.start)) < 1e-6, `peak ${plan.peakOffsetSec} s into the cut`);
+  // and the same peak a moment later, read from a new capture's segments only (a restart is a hole)
+  const second = [{ n: 10, name: segmentFileName(10), t0: peakAt + 100, s: 0, cap: 2 }];
+  assert.deepEqual(planCut([...burst, ...second], peakAt, 20, 6).segments.map((x) => x.name), want, "the cut stays in the capture that holds the peak");
+  // prune: the horizon runs back from the newest end
+  assert.equal(pruneBefore(burst, 20).length, 6, "segments that ended more than 20 s before the newest end go");
 });
