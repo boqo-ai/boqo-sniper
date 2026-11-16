@@ -95,3 +95,48 @@ test("readStatus returns the parsed file, or null when missing or half written",
     assert.deepEqual(await readStatus(dir), { state: "live", segments: 3 });
   });
 });
+
+test("v0.1's watch/<login>/ folder is found for a Twitch login, as a read fallback", async () => {
+  await withHome(async (home) => {
+    const old = path.join(home, "boqo-sniper", "watch", "somechan", "20261110-120000");
+    await fs.mkdir(path.join(old, "moments"), { recursive: true });
+    assert.equal(await currentSession("somechan"), old);
+    assert.equal(await currentSession("twitch.tv/SomeChan"), old);
+    assert.equal(await currentSession("kick:somechan"), null, "Kick has no v0.1 folder");
+    // a v0.2 session for the channel wins as soon as there is one
+    const fresh = await newSession("somechan", new Date(Date.UTC(2026, 10, 1)));
+    assert.equal(await currentSession("somechan"), fresh);
+  });
+});
+
+test("settings.json is read from a session, and its absence is the defaults", async () => {
+  await withHome(async () => {
+    const { readSessionSettings, writeSessionSettings } = await import("../lib/session.mjs");
+    const dir = await newSession("chan");
+    assert.deepEqual(await readSessionSettings(dir), { sensitivity: 70, autoClip: true, autoClipMinScore: 80, windowSec: 300, prompt: null, visionPerHour: 600 });
+    await writeSessionSettings(dir, { sensitivity: 90, autoClip: false, autoClipMinScore: 60, windowSec: 200, prompt: "fails", visionPerHour: 100 });
+    assert.equal((await readSessionSettings(dir)).autoClipMinScore, 60);
+    await fs.writeFile(path.join(dir, "settings.json"), "{half");
+    assert.equal((await readSessionSettings(dir)).autoClipMinScore, 80, "a half-written file reads as the defaults");
+  });
+});
+
+test("countUnclaimed counts only what a predicate on the meta lets through", async () => {
+  await withHome(async () => {
+    const { countUnclaimed } = await import("../lib/session.mjs");
+    const dir = await newSession("chan");
+    const mk = async (name, meta, taken = false) => {
+      const d = path.join(dir, "moments", name);
+      await fs.mkdir(d);
+      if (meta) await fs.writeFile(path.join(d, "meta.json"), JSON.stringify(meta));
+      if (taken) await fs.writeFile(path.join(d, ".taken"), "");
+    };
+    await mk("a", { score: 90 });
+    await mk("b", { score: 70 });
+    await mk("c", { score: 95 }, true);
+    await mk("d", null); // being cut: no meta yet
+    const m = path.join(dir, "moments");
+    assert.equal(await countUnclaimed(m), 3, "no predicate: every unclaimed one");
+    assert.equal(await countUnclaimed(m, (meta) => meta.score >= 80), 2, "a, and d which has no meta yet");
+  });
+});

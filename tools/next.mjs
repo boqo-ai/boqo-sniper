@@ -1,23 +1,33 @@
 #!/usr/bin/env node
-// Next moment: block until the watcher has a new moment, then print it.
+// Next moment: block until the watcher has a moment for the agent, then print it.
 //
-//   next.mjs <channel> [--timeout 540]
+//   next.mjs <channel> [--timeout 170]   wait for the next moment at or above the bar
+//   next.mjs <channel> --list            the moments below the bar that are still unclaimed
+//   next.mjs <channel> --take [<name>]   "clip it": claim a listed moment (the newest, or the one named)
+//
+// The bar is the session's autoClipMinScore (settings.json, written by the watcher; the defaults when there is
+// none), and with autoClip off nothing detected is at the bar. A hand-made moment (`clip now`) always is.
 //
 // One JSON line on stdout:
-//   {"moment": "<dir>", "meta": {...}}   a moment, now claimed with `.taken`
+//   {"moment": "<dir>", "meta": {...}}   a moment at the bar, now claimed with `.taken`
+//   {"listed": "<dir>", "meta": {...}}   a moment below the bar, told once (`.listed`) and NOT claimed
 //   {"stopped": "<state>"}               watcher offline/stopped, or no session
 //   {"stopped": "failed", "error": "..."} the watcher ended on an error
 //   {"timeout": true, "status": {...}}   nothing came in time
-// Never waits past 540 s: Claude Code caps one shell command at 600 s. The skill
-// passes --timeout 170, since Claude Code moves a command to the background
-// after about 180 s whatever its timeout.
+//   {"moments": [...]}                   --list: name, moment, score, band, signalLine, title, peakIso
+// Never waits past 540 s: Claude Code caps one shell command at 600 s. The default and the skill's value are 170,
+// since Claude Code moves a command to the background after about 180 s whatever its timeout.
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { currentSession, readStatus } from "../lib/session.mjs";
+import { pathToFileURL } from "node:url";
+import { currentSession, readSessionSettings, readStatus } from "../lib/session.mjs";
+import { isAutoMoment } from "../lib/settings.mjs";
+import { scoreBand } from "../lib/bands.mjs";
 
 export const MAX_TIMEOUT_S = 540;
+export const DEFAULT_TIMEOUT_S = 170;
 const POLL_MS = 1000;
 
 function fail(message) {
@@ -25,15 +35,26 @@ function fail(message) {
   process.exit(1);
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   let channel = null;
-  let timeout = MAX_TIMEOUT_S;
+  let timeout = DEFAULT_TIMEOUT_S;
+  let mode = "wait";
+  let take = null;
+  const setMode = (m) => {
+    if (mode !== "wait") throw new Error("use one of --list and --take");
+    mode = m;
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--timeout") {
       const raw = argv[++i];
       const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isFinite(n) || n < 0) throw new Error(`bad --timeout: ${raw}`);
       timeout = Math.min(n, MAX_TIMEOUT_S);
+    } else if (argv[i] === "--list") {
+      setMode("list");
+    } else if (argv[i] === "--take") {
+      setMode("take");
+      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("--")) take = argv[++i];
     } else if (argv[i].startsWith("--")) {
       throw new Error(`unknown option: ${argv[i]}`);
     } else if (channel === null) {
@@ -42,43 +63,103 @@ function parseArgs(argv) {
       throw new Error(`unexpected argument: ${argv[i]}`);
     }
   }
-  if (!channel) throw new Error("usage: next.mjs <channel> [--timeout 540]");
-  return { channel, timeout };
+  if (!channel) throw new Error("usage: next.mjs <channel> [--timeout 170] | --list | --take [<name>]");
+  return { channel, timeout, mode, take };
 }
 
-/** Claim the oldest ready, unclaimed moment; null when there is none. */
-async function claimNext(momentsDir) {
-  let names;
+async function readMeta(dir) {
   try {
-    names = (await fsp.readdir(momentsDir, { withFileTypes: true }))
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
+    return JSON.parse(await fsp.readFile(path.join(dir, "meta.json"), "utf8"));
+  } catch {
+    return null; // not ready yet (the watcher writes meta.json last)
+  }
+}
+
+const exists = (file) => fsp.access(file).then(() => true, () => false);
+
+async function momentNames(momentsDir) {
+  try {
+    return (await fsp.readdir(momentsDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
   } catch (err) {
-    if (err.code === "ENOENT") return null;
+    if (err.code === "ENOENT") return [];
     throw err;
   }
-  for (const name of names) {
+}
+
+/** Create a marker file; false when it is already there (another `next` won it). */
+async function mark(file) {
+  try {
+    await (await fsp.open(file, "wx")).close();
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
+  }
+}
+
+/**
+ * The oldest ready, unclaimed moment that needs the agent: one at the bar is claimed (`.taken`); one below it is
+ * told once (`.listed`) and stays unclaimed, for `--take`. Null when there is none.
+ */
+async function claimNext(momentsDir, settings) {
+  for (const name of await momentNames(momentsDir)) {
     const dir = path.join(momentsDir, name);
-    let meta;
-    try {
-      await fsp.access(path.join(dir, ".taken"));
-      continue;
-    } catch {}
-    try {
-      meta = JSON.parse(await fsp.readFile(path.join(dir, "meta.json"), "utf8"));
-    } catch {
-      continue; // not ready yet (the watcher writes meta.json last)
+    if (await exists(path.join(dir, ".taken"))) continue;
+    const meta = await readMeta(dir);
+    if (meta === null) continue;
+    if (isAutoMoment(meta, settings)) {
+      if (!(await mark(path.join(dir, ".taken")))) continue;
+      return { moment: dir, meta };
     }
-    try {
-      await (await fsp.open(path.join(dir, ".taken"), "wx")).close();
-    } catch (err) {
-      if (err.code === "EEXIST") continue; // another `next` won it
-      throw err;
-    }
-    return { moment: dir, meta };
+    if (await exists(path.join(dir, ".listed"))) continue;
+    if (!(await mark(path.join(dir, ".listed")))) continue;
+    return { listed: dir, meta };
   }
   return null;
+}
+
+/** The unclaimed moments below the bar, oldest first. */
+async function listed(momentsDir, settings) {
+  const out = [];
+  for (const name of await momentNames(momentsDir)) {
+    const dir = path.join(momentsDir, name);
+    if (await exists(path.join(dir, ".taken"))) continue;
+    const meta = await readMeta(dir);
+    if (meta === null || isAutoMoment(meta, settings)) continue;
+    out.push({ name, dir, meta });
+  }
+  return out;
+}
+
+async function doList(momentsDir, settings) {
+  const moments = (await listed(momentsDir, settings)).map(({ name, dir, meta }) => ({
+    name,
+    moment: dir,
+    score: meta.score ?? null,
+    band: Number.isFinite(meta.score) ? scoreBand(meta.score) : null,
+    signalLine: meta.signalLine ?? null,
+    title: meta.title ?? null,
+    peakIso: meta.peakIso ?? null,
+  }));
+  console.log(JSON.stringify({ moments }));
+}
+
+async function doTake(momentsDir, settings, name) {
+  if (name !== null && (name !== path.basename(name) || name === "" || name === "." || name === "..")) fail(`no moment named ${name}`);
+  const all = await listed(momentsDir, settings);
+  let pick;
+  if (name === null) {
+    pick = all.at(-1);
+    if (!pick) fail("no listed moment");
+  } else {
+    pick = all.find((m) => m.name === name);
+    if (!pick) {
+      const known = (await momentNames(momentsDir)).includes(name);
+      fail(known ? `moment ${name} is not listed (it is at the bar, or already claimed)` : `no moment named ${name}`);
+    }
+  }
+  if (!(await mark(path.join(pick.dir, ".taken")))) fail(`moment ${pick.name} is already claimed`);
+  console.log(JSON.stringify({ moment: pick.dir, meta: pick.meta }));
 }
 
 async function main() {
@@ -94,6 +175,9 @@ async function main() {
     return;
   }
   const momentsDir = path.join(session, "moments");
+  const settings = await readSessionSettings(session);
+  if (args.mode === "list") return doList(momentsDir, settings);
+  if (args.mode === "take") return doTake(momentsDir, settings, args.take);
   const deadline = Date.now() + args.timeout * 1000;
 
   // fs.watch (recursive, so a late meta.json wakes us too) ends the wait early;
@@ -108,7 +192,7 @@ async function main() {
 
   try {
     for (;;) {
-      const found = await claimNext(momentsDir);
+      const found = await claimNext(momentsDir, settings);
       if (found) {
         console.log(JSON.stringify(found));
         return;
@@ -140,4 +224,12 @@ async function main() {
   }
 }
 
-main().catch((err) => fail(err.message));
+// Run only as a program: a test imports parseArgs. (Node resolves a symlinked entry point; so does this.)
+const isMain = (() => {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+if (isMain) main().catch((err) => fail(err.message));

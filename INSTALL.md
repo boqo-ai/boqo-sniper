@@ -67,7 +67,7 @@ hold a space); `~` does not expand inside quotes, so the commands use `"$HOME/..
 
 6. **Start now, in this chat.** Read `<skills>/boqo-sniper/SKILL.md`, then `<skills>/boqo-sniper/onboarding.md`, and
    run onboarding. It opens with what the next minutes give them (their brand kit, then a live watch of a Twitch
-   channel that clips the moments chat goes wild) and roughly how long. When the person already named a channel,
+   or Kick channel that clips the moments chat goes wild) and roughly how long. When the person already named a channel,
    onboarding ends by starting its watch.
 
 ## If something fails

@@ -7,7 +7,7 @@ a part that is done: a kit `node "$HOME/.boqo-sniper/tools/brand.mjs" list` alre
 skill, so another one may have made it), the rule already in `config.json`.
 
 Open with two sentences: in about two minutes you set up their brand kit (a name, a logo, two colours, and a caption
-style they pick by looking at it), then start watching their Twitch channel. When they already named a channel, say
+style they pick by looking at it), then start watching their Twitch or Kick channel. When they already named a channel, say
 its watch starts right after.
 
 ## 1. The brand kit
@@ -116,7 +116,9 @@ post automatically, up to N a day, to the accounts they name. Without them, writ
 sensitivity.
 
 **The sensitivity:** in the same message, how many moments to catch, from 30 to 95. 70, the default, suits most
-streams; higher catches more moments, lower only the biggest. No answer is 70.
+streams; higher catches more moments, lower only the biggest. No answer is 70. The other session settings
+(`autoClip`, `autoClipMinScore`, `windowSec`, `prompt`, `visionPerHour`) keep their defaults until the person asks
+(SKILL.md → Settings).
 
 `<home>/boqo-sniper/config.json`:
 - `{"posting": "ask", "sensitivity": 70}`, the default;
@@ -126,4 +128,4 @@ The rule and the sensitivity change only when the person says so ("post them aut
 moments"): rewrite the file then.
 
 Onboarding is done. With a channel from the person, go on at SKILL.md → Starting, step 2; without one, ask which
-Twitch channel.
+Twitch or Kick channel.

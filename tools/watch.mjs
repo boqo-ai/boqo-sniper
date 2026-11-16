@@ -4,6 +4,11 @@
 // hosted detector finds (lib/boqo/moments.mjs, fed 1 s ticks by lib/ticks.mjs).
 //
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
+//   watch.mjs <channel> --clip-now      ask the running watcher for a hand-made moment, now (score 100, as hosted)
+//
+// The session's settings are config.json's (lib/settings.mjs: sensitivity, autoClip, autoClipMinScore, windowSec,
+// prompt, visionPerHour); the watcher writes them to the session's settings.json. windowSec sets the cut (the peak
+// is windowSec - 30 s in) and the buffer (windowSec + 60 s); --sensitivity overrides the file.
 //
 // <channel>: a Twitch login, twitch.tv/<login>, kick.com/<slug> or kick:<slug>
 // (boqo's parser, lib/boqo/stream.mjs; a bare name is Twitch).
@@ -12,7 +17,7 @@
 // what it writes: $BOQO_HOME/boqo-sniper/watch/<platform>-<slug>/<YYYYMMDD-HHMMSS>/
 //   buf/seg_<counter>.ts     6 s segments, the newest 360 s (a 300 s window and 60 s); capture-<n>.csv is a capture's segment list
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
-//   status.json  watch.pid   `stop` is written by stop.mjs
+//   status.json  settings.json  watch.pid   `stop` is written by stop.mjs, `clipnow` by --clip-now
 //
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
 // offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} or {"error": "kick lookup timed out"} and exit 2 when
@@ -49,7 +54,7 @@
 // When the segments end, offline polling is stubbed: every poll says offline.
 //
 // Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
-// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 360),
+// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default windowSec + 60),
 // BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
 // BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_MAX_QUEUE and BOQO_SNIPER_MIN_FREE_MB (when a
 // moment is skipped), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
@@ -78,6 +83,8 @@ import {
   currentSession,
   freeBytes,
   newSession,
+  readStatus,
+  writeSessionSettings,
   stamp,
   sweepAll,
   watcherPid,
@@ -85,13 +92,12 @@ import {
   resolveChannel,
 } from "../lib/session.mjs";
 import {
-  HORIZON_SEC,
   POST_ROLL_SEC,
   PRUNE_MARGIN_SEC,
   SEGMENT_SEC,
-  WINDOW_SEC,
   concatArgs,
   MAX_QUEUE,
+  MAX_LISTED,
   MIN_FREE_BYTES,
   concatList,
   createCaptureClock,
@@ -102,6 +108,7 @@ import {
   pruneBefore,
   segmentFileName,
 } from "../lib/buffer.mjs";
+import { resolveSettings, isAutoMoment } from "../lib/settings.mjs";
 import { lineReader, measureMomentary, parseLoudnessLine } from "../lib/loudness.mjs";
 import {
   captureCommand as sourceCommand,
@@ -169,7 +176,7 @@ process.on("uncaughtException", crash);
 process.on("unhandledRejection", crash);
 
 export function parseArgs(argv) {
-  const o = { channel: null, sensitivity: 70, replay: null, chat: null };
+  const o = { channel: null, sensitivity: null, replay: null, chat: null, clipNow: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--sensitivity") {
@@ -177,6 +184,8 @@ export function parseArgs(argv) {
       const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isFinite(n)) throw new Error(`bad --sensitivity: ${raw}`);
       o.sensitivity = n;
+    } else if (a === "--clip-now") {
+      o.clipNow = true;
     } else if (a === "--replay") {
       o.replay = argv[++i];
       if (!o.replay) throw new Error("--replay needs a folder");
@@ -191,8 +200,9 @@ export function parseArgs(argv) {
       throw new Error(`unexpected argument: ${a}`);
     }
   }
-  if (!o.channel) throw new Error("usage: watch.mjs <channel> [--sensitivity 70] [--replay <dir> --chat <file>]");
+  if (!o.channel) throw new Error("usage: watch.mjs <channel> [--sensitivity 70] [--replay <dir> --chat <file>] | --clip-now");
   if (o.chat && !o.replay) throw new Error("--chat only goes with --replay");
+  if (o.clipNow && (o.replay || o.sensitivity !== null)) throw new Error("--clip-now goes with the channel alone");
   return o;
 }
 
@@ -466,6 +476,21 @@ async function isLive(tool, target) {
   return false;
 }
 
+// ---- clip now -------------------------------------------------------------
+
+/**
+ * `--clip-now`: not a watcher. It asks the running one for a hand-made moment by writing `clipnow` into the
+ * session (the watcher reads it every pass, as it reads `stop`), and prints one JSON line.
+ */
+async function clipNowRequest(target, label) {
+  const dir = await currentSession(target);
+  const pid = dir ? await watcherPid(dir) : null;
+  if (!dir || pid === null) fail(`no watcher is running for ${label}`);
+  const status = await readStatus(dir);
+  await fs.writeFile(path.join(dir, "clipnow"), String(Date.now()));
+  console.log(JSON.stringify({ clipNow: true, session: dir, state: status?.state ?? "waiting" }));
+}
+
 // ---- the watcher ----------------------------------------------------------
 
 async function main() {
@@ -483,20 +508,28 @@ async function main() {
   }
   const { platform, channel } = target;
   const label = streamChannelLabel(target);
+  if (args.clipNow) return clipNowRequest(target, label);
   const replay = args.replay !== null;
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
-  const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
   const maxQueue = envNumber("BOQO_SNIPER_MAX_QUEUE", MAX_QUEUE);
   const minFreeBytes = envNumber("BOQO_SNIPER_MIN_FREE_MB", MIN_FREE_BYTES / 1e6) * 1e6;
+
+  const { config, warning } = await readConfig();
+  if (warning) console.error(warning);
+  let settings;
+  try {
+    settings = resolveSettings(config, { sensitivity: args.sensitivity });
+  } catch (err) {
+    fail(err.message);
+  }
+  const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", settings.windowSec + PRUNE_MARGIN_SEC);
 
   let tool = null;
   if (!(await hasTool("ffmpeg", "-version"))) fail("ffmpeg is not on PATH");
   if (!replay) {
     if (process.env.BOQO_SNIPER_SOURCE) tool = "test-source";
     else {
-      const { config, warning } = await readConfig();
-      if (warning) console.error(warning);
       const wantsStreamlink = config.capture === "streamlink";
       try {
         tool = chooseCapture(config, {
@@ -535,6 +568,7 @@ async function main() {
   } catch (err) {
     fail(err.code === "EEXIST" ? `already watching ${label} (${dir})` : err.message);
   }
+  await writeSessionSettings(dir, settings);
   owned = { dir, platform, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
   // tests: BOQO_SNIPER_TEST_CRASH=throw|reject crashes the run 300 ms after its session exists
   const testCrash = process.env.BOQO_SNIPER_TEST_CRASH;
@@ -712,7 +746,7 @@ async function main() {
   /** A new detector and tick feed for a capture phase, as hosted builds one per phase. */
   function startFeed() {
     feed = createTickFeed({
-      detector: createMomentDetector({ windowSec: WINDOW_SEC, sensitivity: args.sensitivity }),
+      detector: createMomentDetector({ windowSec: settings.windowSec, sensitivity: settings.sensitivity }),
       nowMs: clock.now() * 1000,
       chatOpen: chatState === "open",
     });
@@ -750,20 +784,22 @@ async function main() {
   }
 
   async function cut(spike) {
-    // ~140 MB a moment: never more than maxQueue waiting, never under minFreeBytes free.
-    const unclaimed = await countUnclaimed(momentsDir);
+    // About 260 MB a moment at 1080p60 (lib/buffer.mjs MIN_FREE_BYTES): never more than maxQueue waiting for the
+    // agent, never under minFreeBytes free. A moment below the bar is no queue, and a hand-made one skips the queue.
+    const goes = isAutoMoment(spike, settings);
+    const unclaimed = goes && spike.signal !== "manual" ? await countUnclaimed(momentsDir, (m) => isAutoMoment(m, settings)) : 0;
     const free = await freeBytes(dir);
     const why = skipCut({ unclaimed, freeBytes: free }, { maxQueue, minFreeBytes });
     if (why) {
       skipped[why]++;
       console.error(
         why === "queue"
-          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} to be judged`
+          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} for the agent`
           : `moment at ${iso(spike.peakAt)} skipped: only ${(free / 1e9).toFixed(1)} GB free`,
       );
       return;
     }
-    const plan = planCut(segs.filter((s) => s.done), spike.peakAt);
+    const plan = planCut(segs.filter((s) => s.done), spike.peakAt, settings.windowSec);
     if (!plan) {
       console.error(`spike at ${iso(spike.peakAt)} fell outside the buffer; no cut`);
       return;
@@ -798,8 +834,6 @@ async function main() {
         peakAt: spike.peakAt,
         score: spike.score,
         signal: spike.signal,
-        // v0.1's name for `signal`, which the moment docs (judge.md) still read until the moment flow is rewritten
-        reason: spike.signal,
         title: spike.title,
         signalLine: spike.signalLine,
         detail: spike.detail,
@@ -812,12 +846,46 @@ async function main() {
       });
       moments++;
       if (owned) owned.moments = moments;
+      if (!goes) await pruneListed();
     } catch (err) {
       console.error(`cut failed: ${err.message}`);
       await fs.rm(momentDir, { recursive: true, force: true });
     } finally {
       await unlinkRetry(path.join(bufDir, listName));
     }
+  }
+
+  /** Moments below the bar wait for "clip it" and are no queue: keep the newest MAX_LISTED and delete the rest. */
+  async function pruneListed() {
+    const listed = [];
+    let names = [];
+    try {
+      names = (await fs.readdir(momentsDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    } catch {}
+    for (const name of names) {
+      const d = path.join(momentsDir, name);
+      try {
+        await fs.access(path.join(d, ".taken"));
+        continue;
+      } catch {}
+      try {
+        if (!isAutoMoment(JSON.parse(await fs.readFile(path.join(d, "meta.json"), "utf8")), settings)) listed.push(d);
+      } catch {}
+    }
+    for (const d of listed.slice(0, Math.max(0, listed.length - MAX_LISTED))) {
+      console.error(`listed moment ${path.basename(d)} deleted: only the newest ${MAX_LISTED} below the bar are kept`);
+      await fs.rm(d, { recursive: true, force: true });
+    }
+  }
+
+  /** `--clip-now` leaves `clipnow` in the session: a hand-made moment at this second (hosted's manualCandidate). */
+  async function takeClipNow() {
+    try {
+      await fs.rm(path.join(dir, "clipnow"));
+    } catch {
+      return;
+    }
+    pending.push({ peakAt: clock.now(), score: 100, signal: "manual", title: "clipped by hand", signalLine: null, detail: null });
   }
 
   async function prune() {
@@ -838,6 +906,7 @@ async function main() {
       finishSegment(seg);
     }
     drainFeed();
+    await takeClipNow();
     const flush = ended || stopRequested;
     for (let i = 0; i < pending.length; ) {
       const spike = pending[i];

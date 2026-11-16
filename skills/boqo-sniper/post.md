@@ -1,7 +1,7 @@
 <!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ 5558df4; keep in step -->
 # Posting through boqo
 
-Runs after a clip is shown (SKILL.md → The loop, step 8, and Posting). It posts only through boqo's tools, and only by
+Runs after a clip is shown (SKILL.md → The loop, step 3, and Posting). It posts only through boqo's tools, and only by
 the rule in `<home>/boqo-sniper/config.json`. Posting the clip as it is costs no credits. Paths go into commands written
 out in full, in double quotes (SKILL.md → Overview).
 
@@ -65,4 +65,4 @@ A refusal from boqo is its own sentence: say it as it came, keep the files, stop
 all, with the plan line, "Autoposting comes with the 7-day trial or Starter from $12": "Accounts and scheduling are
 on paid plans." from `create_upload`, or "Publishing needs a paid plan." from `post_video`.
 
-Whether the clip was posted goes into its line in `runs.md` (SKILL.md → The loop, step 9).
+Whether the clip was posted goes into its line in `runs.md` (SKILL.md → The loop, step 4).

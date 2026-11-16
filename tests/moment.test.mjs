@@ -139,7 +139,7 @@ test("frameName names a still by its offset; parseOffsets reads the list", () =>
 test("read: meta, the top chat around the peak, chat rates and the video's length", { timeout: 60000 }, async () => {
   const dir = await tmp();
   try {
-    await fs.writeFile(path.join(dir, "meta.json"), JSON.stringify({ peakOffsetSec: 50, score: 80, reason: "chat" }));
+    await fs.writeFile(path.join(dir, "meta.json"), JSON.stringify({ peakOffsetSec: 50, score: 80, signal: "chat" }));
     await fs.writeFile(path.join(dir, "chat.json"), JSON.stringify(sampleChat()));
     const noVideo = await run(["read", dir]);
     assert.equal(noVideo.code, 0, noVideo.stdout);

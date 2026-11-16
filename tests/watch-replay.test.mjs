@@ -135,7 +135,7 @@ test("replay: one burst makes one ~300 s moment, then 10 offline polls end the r
     const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
     // the hosted detector's candidate: a chat moment, titled by its repeated message
     assert.equal(meta.signal, "chat");
-    assert.equal(meta.reason, "chat", "v0.1's name for the signal stays for the moment docs");
+    assert.equal(meta.reason, undefined, "the old name of signal is gone");
     assert.ok(meta.score >= 60 && meta.score <= 100, `score ${meta.score}`);
     assert.equal(meta.title, 'chat spike — "POGGERS" ×35');
     assert.match(meta.signalLine, /^POGGERS ×35 · \d+\/s$/);
@@ -645,7 +645,7 @@ test("a full queue skips a new moment, and status.json counts it", { timeout: 18
     const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MAX_QUEUE: "1" };
     const r = await run(WATCH, ["queued", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
     assert.equal(r.code, 0, r.stderr);
-    assert.match(r.stderr, /skipped: 1 moment waits to be judged/);
+    assert.match(r.stderr, /skipped: 1 moment waits for the agent/);
     const session = await onlySession(home, "queued");
     assert.equal((await fs.readdir(path.join(session, "moments"))).length, 1);
     const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
@@ -740,3 +740,180 @@ test(
     }
   },
 );
+
+async function writeConfig(home, config) {
+  await fs.mkdir(path.join(home, "boqo-sniper"), { recursive: true });
+  await fs.writeFile(path.join(home, "boqo-sniper", "config.json"), JSON.stringify(config));
+}
+
+test("config.json's settings reach the session: settings.json, a 120 s window cut, a 180 s buffer", { timeout: 180000 }, async () => {
+  const work = await tmp("settings");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 70);
+    await makeChat(path.join(work, "chat.jsonl"), 420, 300);
+    await writeConfig(home, { sensitivity: 60, windowSec: 120, autoClipMinScore: 55, prompt: "  funny \n fails ", visionPerHour: 90 });
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_KEEP_BUF: "1" };
+    const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "chan");
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(session, "settings.json"), "utf8")), {
+      sensitivity: 60, autoClip: true, autoClipMinScore: 55, windowSec: 120, prompt: "funny fails", visionPerHour: 90,
+    });
+    const [name] = await fs.readdir(path.join(session, "moments"));
+    const dir = path.join(session, "moments", name);
+    const d = durationOf(path.join(dir, "video.mp4"));
+    assert.ok(d >= 114 && d <= 132, `a 120 s window, got ${d}`);
+    const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
+    assert.ok(meta.peakOffsetSec >= 84 && meta.peakOffsetSec <= 96, `the peak is windowSec - 30 in, got ${meta.peakOffsetSec}`);
+    // the buffer keeps windowSec + 60 = 180 s: 30 segments of 6 s, plus the one being written
+    const left = (await fs.readdir(path.join(session, "buf"))).filter((n) => n.endsWith(".ts"));
+    assert.ok(left.length <= 32 && left.length >= 28, `${left.length} segments left`);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a setting out of its range fails the start with hosted's words, before any session exists", { timeout: 60000 }, async () => {
+  const work = await tmp("badsettings");
+  const home = path.join(work, "home");
+  try {
+    await writeConfig(home, { windowSec: 90 });
+    const r = await run(WATCH, ["chan", "--replay", work, "--sensitivity", "70"], { BOQO_HOME: home });
+    assert.equal(r.code, 1);
+    assert.equal(r.json.error, "config.json: windowSec must be a whole number between 120 and 600.");
+    await assert.rejects(fs.access(path.join(home, "boqo-sniper", "watch")));
+    await writeConfig(home, {});
+    const r2 = await run(WATCH, ["chan", "--replay", work, "--sensitivity", "20"], { BOQO_HOME: home });
+    assert.equal(r2.json.error, "sensitivity must be a whole number between 30 and 95.");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("autoClip off: the burst's moment is cut and listed, `next` tells of it once and does not claim it, `--take` does", { timeout: 180000 }, async () => {
+  const work = await tmp("listed");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 70);
+    await makeChat(path.join(work, "chat.jsonl"), 420, 300);
+    await writeConfig(home, { autoClip: false });
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100" };
+    const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "chan");
+    const [name] = await fs.readdir(path.join(session, "moments"));
+    const dir = path.join(session, "moments", name);
+    const first = await run(NEXT, ["chan", "--timeout", "5"], env);
+    assert.equal(first.json.listed, dir, "listed, not handed out");
+    assert.ok(first.json.meta.score >= 60);
+    const again = await run(NEXT, ["chan", "--timeout", "5"], env);
+    assert.deepEqual(again.json, { stopped: "offline" }, "the watcher is over and the moment is not at the bar");
+    const list = await run(NEXT, ["chan", "--list"], env);
+    assert.equal(list.json.moments.length, 1);
+    assert.equal(list.json.moments[0].band, "exceptional");
+    const take = await run(NEXT, ["chan", "--take"], env);
+    assert.equal(take.json.moment, dir);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("`--clip-now` makes a moment with score 100 from a quiet stream, as hosted's Clip now", { timeout: 180000 }, async () => {
+  const work = await tmp("clipnow");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 70);
+    await makeChat(path.join(work, "chat.jsonl"), 420, null);
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_REPLAY_SPEED: "25" };
+    const watcher = run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    // wait for a minute of buffer, then ask
+    let session = null;
+    for (let i = 0; i < 200 && !session; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      try {
+        const dirs = await fs.readdir(path.join(home, "boqo-sniper", "watch", sessionFolder("chan")));
+        const st = JSON.parse(await fs.readFile(path.join(home, "boqo-sniper", "watch", sessionFolder("chan"), dirs[0], "status.json"), "utf8"));
+        if (st.segments >= 20) session = dirs[0];
+      } catch {}
+    }
+    assert.ok(session, "the replay got going");
+    const ask = await run(WATCH, ["chan", "--clip-now"], env);
+    assert.equal(ask.code, 0, ask.stdout + ask.stderr);
+    assert.equal(ask.json.clipNow, true);
+    const w = await watcher;
+    assert.equal(w.code, 0, w.stderr);
+    const sdir = await onlySession(home, "chan");
+    const names = await fs.readdir(path.join(sdir, "moments"));
+    assert.equal(names.length, 1, `one moment, got ${names}`);
+    const meta = JSON.parse(await fs.readFile(path.join(sdir, "moments", names[0], "meta.json"), "utf8"));
+    assert.equal(meta.score, 100);
+    assert.equal(meta.signal, "manual");
+    assert.equal(meta.title, "clipped by hand");
+    assert.equal(meta.signalLine, null);
+    await assert.rejects(fs.access(path.join(sdir, "clipnow")), "the request is consumed");
+    const next = await run(NEXT, ["chan", "--timeout", "5"], { BOQO_HOME: home });
+    assert.equal(next.json.moment, path.join(sdir, "moments", names[0]), "a hand-made moment is always handed out");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("`--clip-now` with no watcher running says so, and writes nothing", { timeout: 60000 }, async () => {
+  const work = await tmp("clipnow-none");
+  const home = path.join(work, "home");
+  try {
+    const r = await run(WATCH, ["chan", "--clip-now"], { BOQO_HOME: home });
+    assert.equal(r.code, 1);
+    assert.match(r.json.error, /no watcher is running for twitch.tv\/chan/);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("sensitivity from config.json sets the detector's bar: a faint chat rise fires at 95 and not at 30", { timeout: 240000 }, async () => {
+  const work = await tmp("sens");
+  try {
+    await makeSegments(path.join(work, "segs"), 70);
+    // 1 message a second, and from 300 s to 310 s a second one each second (2 a second: z about 2 at the floor sigma)
+    const lines = [];
+    for (let t = 0; t < 420; t++) lines.push({ t, user: `reg${t % 7}`, text: "hello", emotes: 0 });
+    for (let t = 300; t < 310; t++) lines.push({ t: t + 0.5, user: `fan${t}`, text: "pog", emotes: 0 });
+    lines.sort((a, b) => a.t - b.t);
+    await fs.writeFile(path.join(work, "chat.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const moments = {};
+    for (const sensitivity of [30, 95]) {
+      const home = path.join(work, `home${sensitivity}`);
+      await writeConfig(home, { sensitivity });
+      const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100" });
+      assert.equal(r.code, 0, r.stderr);
+      moments[sensitivity] = (await fs.readdir(path.join(await onlySession(home, "chan"), "moments"))).length;
+    }
+    assert.deepEqual(moments, { 30: 0, 95: 1 });
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("moments below the bar are no queue and only the newest 3 are kept", { timeout: 240000 }, async () => {
+  const work = await tmp("listed-prune");
+  const home = path.join(work, "home");
+  try {
+    await makeSegments(path.join(work, "segs"), 200);
+    await makeChatBursts(path.join(work, "chat.jsonl"), 1200, [300, 498, 696, 894, 1092]);
+    await writeConfig(home, { autoClip: false });
+    // a queue of one would skip every moment after the first if they counted; they do not
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MAX_QUEUE: "1" };
+    const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "chan");
+    const names = (await fs.readdir(path.join(session, "moments"))).sort();
+    const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+    assert.equal(status.moments, 5);
+    assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
+    assert.equal(names.length, 3, `the newest 3 stay, got ${names}`);
+    assert.match(r.stderr, /listed moment .* deleted: only the newest 3/);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
