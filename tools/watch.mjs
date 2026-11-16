@@ -657,9 +657,9 @@ async function main() {
 
   // ---- finding and finishing segments ----
 
-  /** Stamp every segment of `list`'s capture from its clock: the anchor may have moved down. */
-  function restamp(cap, clockOf) {
-    for (const seg of segs) if (seg.cap === cap && seg.s !== undefined) seg.t0 = clockOf.t0(seg.s);
+  /** Stamp every segment of `list`'s capture from its clock: an epoch's anchor may have moved down. */
+  function restamp(capture, clockOf) {
+    for (const seg of segs) if (seg.capture === capture && seg.s !== undefined) seg.t0 = clockOf.t0(seg.s, seg.epoch);
     lastDoneEnd = segs.reduce((m, s2) => (s2.done ? Math.max(m, s2.t0 + SEGMENT_SEC) : m), -Infinity);
   }
 
@@ -672,9 +672,17 @@ async function main() {
     const seenAt = clock.now();
     for (const row of rows) {
       if (known.has(row.name)) continue;
-      list.clock.observe(row, seenAt);
+      const r = list.clock.observe(row, seenAt);
       known.add(row.name);
-      segs.push({ n: nextN++, t0: 0, s: row.start, name: row.name, done: true, cap: list.cap });
+      // `cap` is what a cut never joins across: the capture, and within it the epoch (a hole in the content)
+      const seg = { n: nextN++, t0: 0, s: row.start, name: row.name, done: true, capture: list.cap, epoch: r.epoch, cap: `${list.cap}.${r.epoch}` };
+      if (r.splitBack && list.last) {
+        list.last.epoch = r.epoch;
+        list.last.cap = seg.cap;
+      }
+      if (r.splitBack) console.error(`a hole of about ${Math.round(r.gapSec)} s in the stream at ${row.name}: segments from here are placed after it`);
+      segs.push(seg);
+      list.last = seg;
       totalSegments++;
     }
     restamp(list.cap, list.clock);

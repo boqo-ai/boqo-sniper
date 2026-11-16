@@ -260,3 +260,90 @@ test("a cut over segments written in a burst covers the stream span around the p
   // prune: the horizon runs back from the newest end
   assert.equal(pruneBefore(burst, 20).length, 6, "segments that ended more than 20 s before the newest end go");
 });
+
+// ---- a hole inside one capture, and a catch-up, told apart by how the lag ends ----
+
+/** What the watcher does with a row: stamp it from the clock, move the previous row if the clock split, restamp the capture. */
+function feedRows(clock, reads) {
+  const segs = [];
+  for (const { row, at } of reads) {
+    const r = clock.observe(row, at);
+    const seg = { n: segs.length, name: row.name, s: row.start, epoch: r.epoch, cap: `1.${r.epoch}`, readAt: at, splitBack: r.splitBack };
+    if (r.splitBack) {
+      segs.at(-1).epoch = r.epoch;
+      segs.at(-1).cap = seg.cap;
+    }
+    segs.push(seg);
+    for (const x of segs) x.t0 = clock.t0(x.s, x.epoch);
+  }
+  return segs;
+}
+/** 6 s rows by stream time: row i is [6i, 6i + 6). */
+const rowAt = (i) => ({ name: segmentFileName(i), start: 6 * i, end: 6 * i + 6 });
+
+test("a 60 s hole in the content: the segments after it are placed at their live time, and a cut across it splits", () => {
+  // read 8 s after their stream time (T0 = 1000); after stream time 102 the source drops for 60 s and resumes, so the
+  // later rows are read 60 s later, and ffmpeg's list shows them contiguous
+  const reads = [];
+  for (let i = 0; i < 40; i++) reads.push({ row: rowAt(i), at: 1000 + 8 + 6 * i + 6 + (i >= 17 ? 60 : 0) });
+  const c = createCaptureClock();
+  const segs = feedRows(c, reads);
+  // every segment is within one segment of the second it really opened (read time less its length)
+  for (const s of segs) assert.ok(Math.abs(s.t0 - (s.readAt - 6)) <= 6, `${s.name}: placed ${s.t0}, opened ${s.readAt - 6}`);
+  const split = segs.filter((s) => s.splitBack);
+  assert.equal(split.length, 1, "one split");
+  assert.equal(split[0].name, segmentFileName(18), "found at the second row read after the hole");
+  assert.equal(segs[17].cap, segs[18].cap, "the first row read after the hole moves to the new run with it");
+  assert.notEqual(segs[16].cap, segs[17].cap);
+  // a moment just after the hole is cut from the segments after it, one just before from those before it, never across
+  const afterPeak = segs[20].t0 + 3;
+  const afterPlan = planCut(segs, afterPeak, 300, 30);
+  assert.ok(afterPlan.segments.every((s) => s.n >= 17), afterPlan.segments.map((s) => s.name).join());
+  const beforePeak = segs[15].t0 + 3;
+  const beforePlan = planCut(segs, beforePeak, 300, 30);
+  assert.ok(beforePlan.segments.every((s) => s.n <= 16), beforePlan.segments.map((s) => s.name).join());
+  // without the split the whole 40 segments are one run and the later ones sit 60 s early: the defect this pins
+  const flat = segs.map((s) => ({ ...s, cap: "1.0", t0: 1008 + s.s }));
+  assert.ok(Math.abs(flat[20].t0 - (flat[20].readAt - 6)) > 50);
+  assert.ok(planCut(flat, flat[20].t0 + 3, 300, 30).segments.some((s) => s.n < 17), "one run spans the hole");
+});
+
+test("a stall followed by a burst is not a hole: the backlog read in one instant leaves the anchor where it was", () => {
+  const reads = [];
+  for (let i = 0; i < 17; i++) reads.push({ row: rowAt(i), at: 1008 + 6 * i + 6 }); // live to stream 102
+  // the stream stalls for 60 s; its backlog, rows 17 to 26 (stream 102 to 162), arrives at once when it is back live
+  for (let i = 17; i < 27; i++) reads.push({ row: rowAt(i), at: 1008 + 162 });
+  for (let i = 27; i < 35; i++) reads.push({ row: rowAt(i), at: 1008 + 6 * i + 6 });
+  const c = createCaptureClock();
+  const segs = feedRows(c, reads);
+  assert.equal(segs.filter((s) => s.splitBack).length, 0);
+  assert.ok(segs.every((s) => s.epoch === 0));
+  assert.deepEqual(segs.map((s) => s.t0), segs.map((s) => 1008 + s.s), "the anchor never left 1008");
+});
+
+test("a steady stream never splits: read times jitter by up to 20 s, and two rows arrive in one scan now and then", () => {
+  const reads = [];
+  let at = 0;
+  for (let i = 0; i < 400; i++) {
+    const jitter = ((i * 7919) % 21) - 0; // 0..20 s late, a fixed scramble
+    at = Math.max(at, 1008 + 6 * i + 6 + jitter);
+    reads.push({ row: rowAt(i), at: i % 5 === 4 ? reads[i - 1].at : at }); // every fifth shares the previous scan
+  }
+  const c = createCaptureClock();
+  const segs = feedRows(c, reads);
+  assert.equal(segs.filter((s) => s.splitBack).length, 0);
+  assert.ok(segs.every((s) => s.epoch === 0));
+});
+
+test("createCaptureClock: a lag that stays above GAP_SEC for two rows is a shift; one row is not", () => {
+  const c = createCaptureClock();
+  c.observe(rowAt(0), 1006);
+  assert.equal(c.observe(rowAt(1), 1012 + GAP_SEC + 5).splitBack, 0, "one late row");
+  assert.equal(c.observe(rowAt(2), 1018).splitBack, 0, "and it is over");
+  const d = createCaptureClock();
+  d.observe(rowAt(0), 1006);
+  d.observe(rowAt(1), 1012 + 40);
+  const r = d.observe(rowAt(2), 1018 + 40);
+  assert.deepEqual([r.epoch, r.splitBack], [1, 1]);
+  assert.equal(d.t0(rowAt(1).start, 1), 1000 + 40 + 6, "the new epoch's anchor is the two rows' own");
+});
