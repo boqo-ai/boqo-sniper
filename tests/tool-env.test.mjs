@@ -1,5 +1,5 @@
 // boqo-sniper's own processes (the watcher's capture, segmenter and loudness
-// probe, the moment tool's ffprobe and stills) run with the vendored engine's
+// probe, the moment run's ffprobe and the shared tools it starts) run with the vendored engine's
 // toolEnv(): on macOS, Homebrew's ffmpeg-full is keg-only and an agent's shell
 // has no export PATH from an earlier command.
 import { test } from "node:test";
@@ -54,7 +54,7 @@ test("every sniper file that starts a process runs it with toolEnv", () => {
       assert.match(call, /\benv\b/, `${f}: ${m[0]}${call.slice(1, 80)}`);
     }
   }
-  assert.deepEqual(spawners.sort(), ["lib/loudness.mjs", "lib/moment.mjs", "lib/session.mjs", "tools/moment.mjs", "tools/watch.mjs"]);
+  assert.deepEqual(spawners.sort(), ["lib/loudness.mjs", "lib/moment-run.mjs", "lib/moment.mjs", "lib/session.mjs", "tools/watch.mjs"]);
 });
 
 test("durationOf and measureMomentary run ffprobe and ffmpeg with the env they are given", async () => {

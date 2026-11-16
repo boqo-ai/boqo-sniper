@@ -11,8 +11,9 @@ argument-hint: "<twitch or kick channel or link> [brand name]"
 You watch one live Twitch or Kick stream from this machine and clip it while it runs. A watcher in the background
 records the stream into a 6-minute buffer (the window, 300 s, and 60 s), reads its chat and its loudness, and cuts a
 300 s moment each time boqo's detector fires on a chat or sound spike. A moment at or above the bar goes through the
-Clips path (The loop, step 2), renders in the person's brand, and posts only by their rule (`post.md`); one below the
-bar is listed for "clip it". Everything runs on this PC; boqo's servers are touched only to post.
+Clips path (The loop, step 2): you select its clips (`select.md`) and read its frames (`panels.md`, `stranger.md`),
+the tools render them in the person's brand, and they post only by their rule (`post.md`); one below the bar is
+listed for "clip it". Everything runs on this PC; boqo's servers are touched only to post.
 
 **This is a live session, not a run.** It lasts until the person says stop or the stream has been offline for 10
 minutes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
@@ -22,7 +23,8 @@ two chats, as many as the PC carries.
   Linux, and on Windows Git Bash or WSL).
 - **`<home>`:** `$BOQO_HOME`, or `~/.boqo` when it is unset; `echo "${BOQO_HOME:-$HOME/.boqo}"` prints it. Brand kits
   live in `<home>/brands/` and are shared by every boqo skill. This skill's own files: `<home>/boqo-sniper/config.json`
-  (the posting rule and the session settings) and `<home>/boqo-sniper/runs.md` (one line per moment).
+  (the posting rule and the session settings), `<home>/boqo-sniper/runs.md` (one line per moment) and
+  `<home>/boqo-sniper/posts.md` (one line per post).
 - **`<channel>`:** what the tools take: a Twitch login (`<login>`, in lower case) or `kick:<slug>`. A link works too
   (`twitch.tv/<login>`, `kick.com/<slug>`); a Kick slug is 1 to 50 of `a-z`, `0-9`, `_` and `-`.
 - **`<channel folder>`:** `twitch-<login>` or `kick-<slug>`, the folder names under `watch/` and `clips/`.
@@ -33,8 +35,9 @@ two chats, as many as the PC carries.
   peak's UTC second. It holds `video.mp4` (300 s at the stream's quality, about 260 MB at 1080p60, the peak about
   270 s in), `chat.json` (every chat line) and `meta.json` (`peakOffsetSec`, `score`, `signal`, `title`,
   `signalLine`, `detail`).
-- **`<clips>`:** `<home>/boqo-sniper/clips/<channel folder>/<moment name>/`, where the clips land. It sits outside
-  `<session>` because the next watch of the channel deletes moments older than a day.
+- **`<clips>`:** `<home>/boqo-sniper/clips/<channel folder>/<moment name>/`, the moment's Clips run (`moment.mjs start`
+  prints it as `run`). Its clips land in `<clips>/out/` (`clip-01.mp4` is the best). It sits outside `<session>`
+  because the next watch of the channel deletes moments older than a day.
 - **Paths in commands:** write `<home>`, `<moment>`, `<clips>` and every other path out in full, as the absolute
   path, inside double quotes, in every command, and `<channel>` and `<name>` in double quotes too:
   `"/Users/ana/.boqo/boqo-sniper/clips/somechannel/20261115-220301/clip-01.mp4"`. A shell variable set in one command
@@ -59,8 +62,8 @@ two chats, as many as the PC carries.
   Files stay in English.
 - **Short messages:** what happened, what comes next. No tour of the tools unless asked.
 - **Long commands:** `next.mjs` runs with `--timeout 170`: Claude Code moves a command to the background after about
-  180 s, whatever its timeout. whisper and render take a minute or two each on a CPU. Give every command in the loop
-  up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
+  180 s, whatever its timeout. whisper (`moment.mjs start`) and each render (one `moment.mjs step`) take a minute or
+  two on a CPU. Give every command in the loop up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
 - **Disk:** the watcher keeps about 320 MB of buffer while it runs (1080p60, 360 s), and every moment adds about
   260 MB until you delete its `video.mp4`. It does not cut a new moment while 10 wait for you or less than 5 GB is
   free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`). Moments below the bar are no queue; the newest
@@ -141,20 +144,42 @@ Repeat until The end.
    - `{"moment": "<moment>", "meta": {…}}`: a moment at the bar, now yours: go on with step 2.
    - `{"listed": "<moment>", "meta": {…}}`: a moment below the bar (or any detected one, with `autoClip` off). It is
      cut and not clipped. Tell the person in one line, `<score> <band> · <signalLine> · <title>`, and that "clip it"
-     clips it. Then step 1 again. The word the band gets is in `runs.md`'s format (step 4).
+     clips it. Then step 1 again. The band word: exceptional from 85, strong 70, decent 60, watchable 40, weak below.
    - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 4 minutes
      old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up, and never signals a process that
      is not the watcher), tell the person, offer to start again (Starting, step 3), and go to The end.
    - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end.
-2. **The moment flow.** The moment goes through the Clips path: whisper on its 300 s, segments, selection, render
-   with the `presence` subject rule and panels, the stranger judgment. *(Written with the Clips render, in the next
-   task; this line is its placeholder.)* A clip appears as one line: the title, the length and its file.
-3. **Post** by the rule (Posting).
-4. **Log.** Append one line per moment to `<home>/boqo-sniper/runs.md`:
-   `21:04 · 86 exceptional · NO WAY ×168 · 30/s · <title> · 4 clips`: the local time, the score and its band
-   (exceptional from 85, strong 70, decent 60, watchable 40, weak below), the signal line (`NO WAY ×168 · 30/s`, or
-   `Audio +9 LU`, or none for a hand-made moment), the title and the clip count; `· no read` when the hour's image
-   budget (`visionPerHour`) was spent and a clip went without its reads.
+2. **The moment flow,** the Clips path on the moment's window. Moments wait while you do it; the watch keeps
+   recording.
+   1. **Start:** whisper on the window, then the selection request.
+      ```sh
+      node "$HOME/.boqo-sniper/tools/moment.mjs" start "<moment>" --brand "<name>"
+      ```
+      `{"run": "<clips>", "write": "selection", "request", "answer", "target"}`: keep `<clips>`. `{"done": true,
+      "reason": "no speech"}`: whisper heard nothing to clip; the moment is over with no clips (back to step 1).
+   2. **Select.** Read `select.md`, then the whole of `request` (in pages when it is long), and write `answer`
+      (`<clips>/selection.json`) once, with about `target` clips.
+   3. **Step,** again and again, until it says `done`:
+      ```sh
+      node "$HOME/.boqo-sniper/tools/moment.mjs" step "<clips>"
+      ```
+      - `{"write": "selection", "errors": [...]}`: each error is `clips[i].field: what is wrong`, `clips[0]` being
+        the first clip. Fix them in `<clips>/selection.json`, then step.
+      - `{"read": "probe" | "panels" | "stranger", "turn", "answer", "doc"}`: the prompt is in `doc` (`panels.md` or
+        `stranger.md`; read each once a session). Read `turn`, look at every frame it lists, write `answer` as `doc`
+        says, then step. With `errors`: fix `answer`, then step.
+      - `{"next": true, …}`: one clip rendered (`rendered`) or failed (`failed`, with its `error`). Step, saying
+        nothing.
+      - `"budgetSpent": true` on any line: the hour's image budget (`visionPerHour`) is spent. Say once: "This hour's
+        image budget is spent: the next clips render without new reads."
+      - `{"done": true, "clips": [...], "failed": [...], "runsLine"}`: the moment is over. One line per clip, best
+        first: its title, its length (`seconds`, whole) and its `file`. A failed clip: its `error`, in one line. The
+        moment's `video.mp4` is deleted, and its `runsLine` is in `runs.md` (step 4).
+3. **Post** a moment's clips by the rule (Posting).
+4. **The log.** `step` wrote the moment's line in `<home>/boqo-sniper/runs.md`:
+   `21:04 · 86 exceptional · NO WAY ×168 · 30/s · <title> · 4 clips`: the local time, the score and its band, the
+   signal line (none for a hand-made moment), the title and the clip count; `· no read` when the hour's image budget
+   was spent and a clip went without its reads. Write no moment line there yourself.
 
 **Clip now and clip it.** "Clip now" (the person says so about the stream as it is):
 ```sh
@@ -163,7 +188,8 @@ node "$HOME/.boqo-sniper/tools/watch.mjs" "<channel>" --clip-now
 makes a moment of score 100 at this second; it arrives from `next.mjs` about 35 s later (the post-roll).
 `{"clipNow": false, "reason": "buffer empty" | "stream <state>" | "disk"}` says nothing will be cut: tell the person why. "Clip it"
 (about a moment you told them is below the bar): `next.mjs "<channel>" --take` claims the newest listed one, or
-`--take "<moment name>"` that one; `next.mjs "<channel>" --list` lists them. Both go on at step 2.
+`--take "<moment name>"` that one; `next.mjs "<channel>" --list` lists them. Both go on at step 2, with the
+`moment` the line names.
 
 **The status line.** Every 10 moments, or every 30 minutes since the last thing you told the person, whichever comes
 first, one line: `Watching <channel>: <watched time>, <moments> moments, <kept> clips.` Nothing else while it is
@@ -171,33 +197,37 @@ quiet.
 
 ## Posting
 
-`post.md` has the steps. Here there is one clip per moment, so its batch wording ("best first", telling what went
-after a batch) does not apply. Its steps run once per session, then once per clip:
+`post.md` has the steps. A moment's clips are one batch, best first (`clip-01` first). Its steps run once per session,
+then once per moment:
 - **Once, before the first clip is offered or posted,** post.md → Before the first clip, steps 1, 2 and 4: the boqo
-  tools, the plan and the accounts. Its step 3, the rule, runs for each clip as below. Posting is off for the rest of
-  the session, and no clip waits for an answer, whatever the rule says, when:
+  tools, the plan and the accounts. Its step 3, the rule, runs for each moment as below. Posting is off for the rest
+  of the session, and no clip waits for an answer, whatever the rule says, when:
   - there are no boqo tools: the clips land on disk. When the person asks to post, give the one line from
     onboarding.md → 2;
   - the plan has no publishing: say once, "Autoposting comes with the 7-day trial or Starter from $12";
   - no account is active: say once that they connect or reconnect one in boqo, under Accounts. When they say it is
     connected, run steps 2 and 4 again.
-- **`ask`,** with posting on: after showing a clip, ask "Post it? Where?" and wait. The first time, say that while you
-  wait the loop is paused: the watch keeps recording and up to 10 moments queue up for when they answer. Offer the hands-free rule once:
-  post automatically, up to N a day, to the accounts they name (onboarding.md → The posting rule writes it). A no,
-  or "later": the clip stays on disk; back to the loop.
+- **`ask`,** with posting on: after showing a moment's clips, ask "Post any of these? Which, and where?" and wait.
+  The first time, say that while you wait the loop is paused: the watch keeps recording and up to 10 moments queue up
+  for when they answer. Offer the hands-free rule once: post automatically, up to N a day, to the accounts they name
+  (onboarding.md → The posting rule writes it). A no, or "later": the clips stay on disk; back to the loop.
 - **`{"auto": N}`,** with posting on: today's posts so far are
   ```sh
-  grep "^$(date +%F) " "<home>/boqo-sniper/runs.md" | grep -cF "| posted 1"
+  grep "^$(date +%F) " "<home>/boqo-sniper/posts.md" | grep -cF "| posted 1 "
   ```
-  (it prints `0`, and exits 1, when there are none). Fewer than N: post the clip with no question to the config's
-  `accounts`, then one line saying where it went. N reached: keep clipping, and say once that today's posts are
-  done. No `accounts` in the config: ask once which accounts, and save them into `config.json`; until they answer,
-  this clip goes by `ask`.
+  (it prints `0`, and exits 1, when there are none). Post the moment's clips, best first, until today's posts reach N,
+  to the config's `accounts`, with no question; then one line saying where they went. N reached: keep clipping, and
+  say once that today's posts are done. No `accounts` in the config: ask once which accounts, and save them into
+  `config.json`; until they answer, this moment goes by `ask`.
 - Each post: post.md → Each clip, with `<clips>` as its folder (the reply file goes there and is deleted after the
-  upload). Keep the `projectId` from its step 4: it goes into the clip's line in `runs.md` (The loop, step 4).
-  `post_video` goes once for this clip. An unclear reply (a timeout, a dropped connection, no answer) is never sent
-  again: `list_schedule` decides, as post.md step 6 says. This clip's post there: `posted 1 <projectId>`. None:
-  `posted 0`, and tell the person it may not have gone out.
+  upload) and `<k>` the clip's number (`clip-02.mp4` is 2). `post_video` goes once for this clip. An unclear reply (a
+  timeout, a dropped connection, no answer) is never sent again: `list_schedule` decides, as post.md step 6 says.
+  Then record it, with the `projectId` from post.md step 4:
+  ```sh
+  node "$HOME/.boqo-sniper/tools/moment.mjs" posted "<clips>" --n <k> --project "<projectId>"
+  ```
+  or, when `list_schedule` found no post of it, `--none` in place of `--project "<projectId>"`, and tell the person
+  it may not have gone out.
 - **A plan refusal in the middle of a session** ("Accounts and scheduling are on paid plans." from `create_upload`,
   or "Publishing needs a paid plan." from `post_video`): posting is off for the rest of the session. Say the plan
   line once; the watch and the loop go on clipping, and no clip waits for an answer. post.md's "stops them all" means
@@ -221,15 +251,17 @@ says to finish them, run `next.mjs` and the loop on each, until it says `stopped
   (Starting, step 3).
 
 Then:
-1. **The posts.** For each clip posted this session (its line ends `| posted 1 <projectId>`:
-   `grep -F "<channel> <session name> |" "<home>/boqo-sniper/runs.md" | grep -F "| posted 1 "`), `get_project
-   {projectId}`. `queued`, `processing` or `ready` is fine. `failed`: that clip will not be posted; the report names
-   it with its error, the text inside the reply's `<data kind="project_error">` tag.
-2. **Report** in a few lines: watched time, moments, clips kept, skipped, posted, moments left unclipped, moments the
-   watcher did not cut (`status.mjs`'s `skipped`: `queue`, too many waiting; `disk`, too little free), any post that
-   failed (step 1), and the folder `<home>/boqo-sniper/clips/<channel>/`. Count this session's lines in
-   `runs.md`. *(The counts by `grep` on the old line format are rewritten with the moment flow.)* The moments are
-   `status.mjs`'s `moments`.
+1. **The posts.** This session's posts:
+   ```sh
+   grep -F "| <channel folder> <session name> |" "<home>/boqo-sniper/posts.md" | grep -F "| posted 1 "
+   ```
+   For each line, `get_project {projectId}`, the line's last word. `queued`, `processing` or `ready` is fine.
+   `failed`: that clip will not be posted; the report names it with its error, the text inside the reply's
+   `<data kind="project_error">` tag.
+2. **Report** in a few lines, from `status.mjs "<channel>"`: watched time, moments (`moments`), moments clipped
+   (`clipped`), clips kept (`clips`), posted (step 1's lines), moments left unclipped, moments the watcher did not cut
+   (`skipped`: `queue`, too many waiting; `disk`, too little free), any post that failed (step 1), and the folder
+   `<home>/boqo-sniper/clips/<channel folder>/`.
 3. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
 4. **Moments left unclaimed:** offer to delete their videos (about 260 MB each). On a yes, with `<session>` written
    out:
@@ -259,8 +291,9 @@ and offer to restart now (Stop, then Starting, step 4), which starts a fresh buf
 |---|---|
 | "Nine minutes and nothing: I'll tell them it's quiet" | A `timeout` is silent. The status line comes every 10 moments or 30 minutes |
 | "The person said 'nice', so I'll post it" | Only the rule posts. With `ask`, a post needs a yes to posting |
-| "I'll keep the moment's video in case they want a redo" | Delete `video.mp4` once the clips are made: 260 MB a moment fills a disk in an evening |
-| "I'll read chat.json to see what happened" | `moment.mjs read`. The whole file is hundreds of KB |
+| "The clips are rendered, I'll skip the stranger reads" | Step until `done`: the reads set the order, and `done` writes the log |
+| "The hour's budget is spent, I'll look at the frames anyway" | Past the budget nothing is asked: the clips reuse the last read |
+| "I'll append the moment's line to runs.md" | `step` writes it at `done`; you write posts only, with `moment.mjs posted` |
 | "They said stop, but three moments are queued: I'll finish them" | Stop is quick. The queue waits unless they ask to finish it |
 | "Publishing needs a paid plan, so the session is over" | Posting is off; the watch and the clipping go on |
 | "`post_video` timed out, I'll call it again" | It may have posted. `list_schedule` decides; never a second `post_video` |

@@ -14,10 +14,9 @@ out in full, in double quotes (SKILL.md → Overview).
 3. **The rule.**
    - `ask`, or no config file: offer it in one line ("Post any of these? Which, and where?") and wait. A no, or no
      answer: stop; the files stay where they are.
-   - `{"auto": N}`: the clips go best first (`clip-01` first), up to N minus the posts already made today (the
-     `posted` counts of today's lines in `runs.md`), to the config's `accounts`, with no question. The person is told
-     what went (step 7). No `accounts` in the config: as `ask`. A line in `runs.md` for this same link or file with
-     `posted` above 0: as `ask`, saying its clips went out on that line's date (a re-run picks the same moments).
+   - `{"auto": N}`: the clips go best first (`clip-01` first), up to N minus the posts already made today (today's
+     `posted 1` lines in `posts.md`, SKILL.md → Posting), to the config's `accounts`, with no question. The person is
+     told what went (step 7). No `accounts` in the config: as `ask`.
 4. **The accounts.** `list_accounts`, the ones with status `active`. With `ask`, the person names them; several and
    no name: ask which, never choose for them. None active: say so (they connect or reconnect it in boqo, under
    Accounts), and stop.
@@ -30,7 +29,8 @@ One clip at a time. `<file>` is its path, `<k>` its number.
 2. `node "$HOME/.boqo-sniper/tools/boqo-upload.mjs" name "<the clip's title>"` gives `filename`. An error (a `-`, `_` or `/`,
    a single word): reword the title without it, and use the new title from here on.
 3. `create_upload {filename, contentType: "video/mp4", sizeBytes, kind: "post"}`. Write its reply, exactly as it came,
-   to `<clips>/upload-<k>.json`. It holds signed upload URLs: never print them, quote them or put them in `runs.md`.
+   to `<clips>/upload-<k>.json`. It holds signed upload URLs: never print them, quote them or put them in `runs.md`
+   or `posts.md`.
 4. `node "$HOME/.boqo-sniper/tools/boqo-upload.mjs" put "<file>" --reply "<clips>/upload-<k>.json"` gives
    `{"ok": true, "projectId", …}`: delete `<clips>/upload-<k>.json`. `"ok": false` or an error: say which part failed,
    and offer one retry, `put` again with the same reply file (its URLs live 48 hours). Once the person stops, delete
@@ -65,4 +65,4 @@ A refusal from boqo is its own sentence: say it as it came, keep the files, stop
 all, with the plan line, "Autoposting comes with the 7-day trial or Starter from $12": "Accounts and scheduling are
 on paid plans." from `create_upload`, or "Publishing needs a paid plan." from `post_video`.
 
-Whether the clip was posted goes into its line in `runs.md` (SKILL.md → The loop, step 4).
+Whether the clip was posted goes into `posts.md` with `moment.mjs posted` (SKILL.md → Posting).

@@ -1,18 +1,32 @@
-import { test } from "node:test";
+// The moment flow (lib/moment-run.mjs, tools/moment.mjs) on a synthetic window: whisper's words injected, a
+// fixture selection.json, the test standing in as the agent for the reads, and real ffmpeg for the frames and the
+// renders. The engine's own parts are tested in boqo-clips; this holds the order, the session's probe and image
+// budget, the reused boxes past the budget, and the runs.md and posts.md lines.
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { FRAME_OFFSETS, chatRates, frameName, frameTimes, normalizeChat, parseOffsets, topChat, wordLines } from "../lib/moment.mjs";
 import { toolEnv } from "../engine/env.mjs";
+import { renderClip } from "../engine/render.mjs";
+import { segmentsFromWords } from "../engine/segments.mjs";
+import { lastBoxesOf, momentPaths, postedLine, reusedDecision, startMoment, stepMoment } from "../lib/moment-run.mjs";
+import { defaultSettings } from "../lib/settings.mjs";
+import { newSession, readTally, visionFile, writeSessionSettings } from "../lib/session.mjs";
 
 const MOMENT = fileURLToPath(new URL("../tools/moment.mjs", import.meta.url));
+const STATUS = fileURLToPath(new URL("../tools/status.mjs", import.meta.url));
+const ffmpegHere = spawnSync("ffmpeg", ["-version"], { env: toolEnv() }).status === 0;
+const skip = ffmpegHere ? false : "ffmpeg is not on PATH";
 
-function run(args) {
+const readJson = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
+const writeJson = (f, v) => fs.writeFileSync(f, JSON.stringify(v));
+
+function runCli(file, args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [MOMENT, ...args]);
+    const child = spawn(process.execPath, [file, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -28,197 +42,293 @@ function run(args) {
   });
 }
 
-async function tmp() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "sniper-moment-"));
-}
-
-/** A small mp4 of `seconds` (testsrc + sine). */
-function makeVideo(file, seconds) {
+// BOQO_HOME for the whole file, with a space in it on purpose.
+let home;
+let oldHome;
+let window300;
+before(() => {
+  oldHome = process.env.BOQO_HOME;
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "sniper moment "));
+  process.env.BOQO_HOME = home;
+  if (!ffmpegHere) return;
+  // A 300 s landscape window (a game stream's shape, 854x480, so the panels read is eligible) with a tone.
+  window300 = path.join(home, "window.mp4");
   const r = spawnSync(
     "ffmpeg",
     [
       "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
-      "-f", "lavfi", "-i", `testsrc=size=320x180:rate=25:duration=${seconds}`,
-      "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
-      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", file,
+      "-f", "lavfi", "-i", "testsrc2=size=854x480:rate=10:duration=300",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=300",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", window300,
     ],
     { encoding: "utf8", env: toolEnv() },
   );
   assert.equal(r.status, 0, r.stderr);
+});
+after(() => {
+  if (oldHome === undefined) delete process.env.BOQO_HOME;
+  else process.env.BOQO_HOME = oldHome;
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+const PEAK_AT = Date.UTC(2026, 10, 16, 21, 4, 30) / 1000;
+const DETAIL = { chatPerSec: 30.2, chatBaseline: 2, loudness: null, loudnessBaseline: null, topMessage: "NO WAY", topCount: 168 };
+
+/** A moment folder in `session`, as the watcher leaves it: video.mp4 (the window), chat.json, meta.json. */
+function addMoment(session, name, { video = window300, meta = {} } = {}) {
+  const dir = path.join(session, "moments", name);
+  fs.mkdirSync(dir, { recursive: true });
+  if (video) fs.copyFileSync(video, path.join(dir, "video.mp4"));
+  writeJson(path.join(dir, "chat.json"), []);
+  writeJson(path.join(dir, "meta.json"), {
+    peakAt: PEAK_AT, score: 86, signal: "chat", title: 'chat spike — "NO WAY" ×168', detail: DETAIL,
+    platform: "twitch", channel: "chan", peakOffsetSec: 270, ...meta,
+  });
+  fs.writeFileSync(path.join(dir, ".taken"), "");
+  return dir;
 }
 
-/** Chat over 100 s: "hello" every second, a burst of "LUL LUL LUL" and "NO SHOT" around 50 s. */
-function sampleChat() {
-  const chat = [];
-  for (let t = 0; t < 100; t++) chat.push({ t, user: `u${t % 5}`, text: "hello", emotes: 0 });
-  for (let i = 0; i < 12; i++) chat.push({ t: 48 + i * 0.5, user: `f${i}`, text: "LUL LUL LUL", emotes: 3 });
-  for (let i = 0; i < 3; i++) chat.push({ t: 47 + i, user: `g${i}`, text: "lul", emotes: 1 });
-  for (let i = 0; i < 5; i++) chat.push({ t: 52 + i, user: `h${i}`, text: "NO   SHOT", emotes: 0 });
-  chat.push({ t: 90, user: "late", text: "LUL", emotes: 1 }); // outside the peak window
-  return chat.sort((a, b) => a.t - b.t);
+/** whisper's words, injected: a 10-word sentence every 4 s over the window, a word every 0.4 s. */
+const fakeAsr = (seconds = 300) => async ({ run }) => {
+  const words = [];
+  for (let i = 0; i * 0.4 < seconds - 0.4; i++) {
+    const t = Math.round(i * 0.4 * 100) / 100;
+    words.push({ w: i % 10 === 9 ? `word${i}.` : `word${i}`, s: t, e: Math.round((t + 0.3) * 100) / 100 });
+  }
+  writeJson(path.join(run, "words.json"), words);
+  writeJson(path.join(run, "segments.json"), segmentsFromWords(words, { source: "whisper" }));
+};
+const silentAsr = async ({ run }) => {
+  writeJson(path.join(run, "words.json"), []);
+  writeJson(path.join(run, "segments.json"), []);
+};
+
+/** The agent's selection: hosted's wire shape, one clip per [start, end]. */
+const selection = (spans) => ({
+  clips: spans.map(([s, e], i) => ({
+    start_sec: s, end_sec: e, title: `Clip ${i + 1}`, hook: `Hook ${i + 1}`, score: 90 - i * 5,
+    hook_score: 80, flow_score: 80, standalone_score: 80, value_score: 80, emphasis_words: ["word"],
+    stands_alone: true, claim: "A claim.", bridge_from_sec: null, context_line: null,
+    title_alternatives: [`First ${i + 1}`, `Second ${i + 1}`],
+  })),
+});
+
+const ANNOTATION = {
+  hook_type: "visual_action", hook_text: "word word", hook_promises_payoff: true, time_to_payoff_s: 5,
+  narrative_arc: "setup_tension_payoff", ends_with: "punchline_or_payoff", comprehensible_without_context: 4,
+  share_trigger: "awe_or_surprise", comment_bait: false, caption_style: "word_by_word_highlight",
+  caption_position: "lower_third", title_card_or_headline: true, on_screen_text_other: false, broll_or_cutaways: "none",
+  layout: "gameplay_plus_cam", visible_zoom_punches_or_jumpcuts: "none", music_present_guess: "unknown",
+  emotional_peak: "awe", overall_quality_judgment: 4, one_line_why: "The play lands.",
+};
+// A camera inset over a full-screen game, the shape panels-plan.mjs lays out as panels.
+const CAMERA = { x: 0.72, y: 0.05, w: 0.26, h: 0.3 };
+const GAME = { x: 0, y: 0, w: 1, h: 1 };
+const FOCUS = { x: 0.2, y: 0.5, w: 0.2, h: 0.2 };
+
+/** Answers what a step asks, as the agent would, and steps again until the moment is done. Returns every step. */
+async function drive(run, seams, { onAsk = () => {} } = {}) {
+  const steps = [];
+  for (let i = 0; i < 40; i++) {
+    const r = await stepMoment({ run, ...seams });
+    steps.push(r);
+    await onAsk(r, steps.length);
+    if (r.done) return steps;
+    if (r.errors) throw new Error(`step refused: ${JSON.stringify(r)}`);
+    if (r.read === "probe") writeJson(r.answer, { isStream: true, gameTitle: "Test Game" });
+    if (r.read === "panels") {
+      const { frames } = readJson(path.join(path.dirname(r.turn), "frames.json"));
+      const samples = frames.map((f) => ({ sourceSec: f.sourceSec, mode: "panels", cameras: [CAMERA], game: GAME, focus: FOCUS, why: "the fight" }));
+      writeJson(r.answer, { content: "stream_with_game", gameTitle: "Test Game", samples });
+    }
+    if (r.read === "stranger") writeJson(r.answer, ANNOTATION);
+  }
+  throw new Error("the moment did not finish in 40 steps");
 }
 
-test("normalizeChat lower-cases, squeezes spaces and counts a repeated word once", () => {
-  assert.equal(normalizeChat("LUL LUL  LUL"), "lul");
-  assert.equal(normalizeChat("NO   SHOT"), "no shot");
-  assert.equal(normalizeChat("W W cop W"), "w cop w");
-  assert.equal(normalizeChat("   "), "");
-  assert.equal(normalizeChat(undefined), "");
-  assert.equal(normalizeChat("lol \u034F"), "lol", "the duplicate-filter dodge is invisible");
-  assert.equal(normalizeChat("lol \u{E0000}"), "lol");
-  assert.equal(normalizeChat("w\u200Bw cop"), "ww cop");
-  assert.equal(normalizeChat("\u2800"), "");
-  assert.equal(normalizeChat("Café"), "café", "letters are kept");
-});
+// onnxruntime-node standing in as not loadable: faces are unavailable, every shot without panels is Fit.
+const noRuntime = async () => {
+  throw new Error("onnxruntime-node is not installed");
+};
+function renderSeam() {
+  const seen = [];
+  return {
+    seen,
+    render: async (args) => {
+      const r = await renderClip({ ...args, load: noRuntime });
+      seen.push({ n: args.row.n, subjectRule: args.subjectRule, layouts: r.layouts });
+      return r;
+    },
+    loadDetector: async () => undefined,
+  };
+}
 
-test("topChat counts the window only, most first, at most 8", () => {
-  const top = topChat(sampleChat(), 35, 75);
-  assert.deepEqual(top, [
-    { text: "hello", count: 40 },
-    { text: "lul", count: 15 },
-    { text: "no shot", count: 5 },
-  ]);
-  const many = Array.from({ length: 20 }, (_, i) => ({ t: 1, user: "x", text: `m${i}` }));
-  assert.equal(topChat(many).length, 8);
-  // ties go to the message seen first
-  assert.deepEqual(topChat([{ t: 5, text: "b" }, { t: 1, text: "a" }]).map((x) => x.text), ["a", "b"]);
-});
+const imagesOf = (session) => readJson(visionFile(session)).reduce((sum, [, n]) => sum + n, 0);
 
-test("chatRates gives messages a second per 10 s, sized by the length when known", () => {
-  const chat = [{ t: 0 }, { t: 1 }, { t: 9.9 }, { t: 10 }, { t: 25 }];
-  assert.deepEqual(chatRates(chat, 30), [0.3, 0.1, 0.1]);
-  assert.deepEqual(chatRates(chat, 40), [0.3, 0.1, 0.1, 0]);
-  assert.deepEqual(chatRates(chat), [0.3, 0.1, 0.1], "without a length, up to the last message");
-  assert.deepEqual(chatRates([], null), []);
-});
+test("two moments of one session: every kept clip rendered with presence, the probe asked once, then the budget spent", { skip, timeout: 900_000 }, async () => {
+  const session = await newSession("chan");
+  await writeSessionSettings(session, { ...defaultSettings(), prompt: "the clutch plays", visionPerHour: 600 });
 
-test("wordLines breaks at sentence ends, pauses and 8 s, with exact times", () => {
-  const w = (text, s, e) => ({ w: text, s, e });
-  const words = [
-    w("He's", 85.36, 85.56), w("leaving", 85.56, 85.91), w("his", 85.91, 86.06), w("king.", 86.06, 87.27),
-    w("All", 91.84, 92.0), w("right,", 92.0, 92.3), // pause before: new line
-    w("so", 92.3, 92.5), w("I'm", 92.5, 92.7), w("gonna", 92.7, 93.0), w("do", 93.0, 93.2), w("this", 93.2, 93.84),
-    w("and", 93.9, 94.0), w("then", 94.1, 95.0), w("go", 95.1, 96.0), w("on", 96.1, 99.9), w("forever", 100.0, 100.2),
-  ];
-  const lines = wordLines(words);
-  assert.equal(lines[0], "[1:25] He's leaving his king. (85.36-87.27)");
-  assert.equal(lines[1], "[1:31] All right, so I'm gonna do this and then go on (91.84-99.90)", "a pause starts a line");
-  assert.equal(lines[2], "[1:40] forever (100.00-100.20)", "the 8 s cap starts a new line with no pause");
-  assert.equal(lines.length, 3);
-});
+  // ---- the first moment: every read paid for ----
+  const m1 = addMoment(session, "20261116-210430");
+  const start = await startMoment({ moment: m1, asr: fakeAsr() });
+  assert.equal(start.write, "selection");
+  assert.equal(start.target, 5, "the window's 300 s is a target of 5");
+  assert.equal(start.run, path.join(home, "boqo-sniper", "clips", "twitch-chan", "20261116-210430"));
+  const request = fs.readFileSync(start.request, "utf8");
+  assert.match(request, /the clutch plays/, "the watch's prompt is the creator's request");
+  assert.deepEqual(readJson(path.join(start.run, "sections.json")).files.map((f) => [f.s, Math.round(f.e)]), [[0, 300]]);
+  // the same start again answers the same and redoes nothing
+  assert.deepEqual(await startMoment({ moment: m1, asr: async () => assert.fail("whisper ran twice") }), start);
 
-test("wordLines with --around keeps the words within span/2 of that second", () => {
-  const words = Array.from({ length: 100 }, (_, i) => ({ w: `w${i}.`, s: i, e: i + 0.5 }));
-  const lines = wordLines(words, { around: 50, span: 10 });
-  assert.equal(lines.length, 11);
-  assert.equal(lines[0], "[0:45] w45. (45.00-45.50)");
-  assert.equal(lines.at(-1), "[0:55] w55. (55.00-55.50)");
-  assert.deepEqual(wordLines([{ w: " ", s: 1, e: 2 }, { w: "x", s: NaN, e: 1 }]), [], "blank and broken words are dropped");
-});
+  // A selection the check refuses comes back with its errors; a fixed one goes on.
+  writeJson(start.answer, { clips: [{ start_sec: 20 }] });
+  const refused = await stepMoment({ run: start.run });
+  assert.equal(refused.write, "selection");
+  assert.ok(refused.errors.length > 0);
+  writeJson(start.answer, selection([[20, 40], [200, 220]]));
 
-test("frameTimes: four stills by default, from 12 s before the peak to 2 s after, clamped into the file", () => {
-  assert.deepEqual(FRAME_OFFSETS, [-12, -6, 0, 2]);
-  assert.deepEqual(frameTimes(125, 160), [113, 119, 125, 127]);
-  assert.deepEqual(frameTimes(3, 4), [0, 0, 3, 3.9]);
-  assert.deepEqual(frameTimes(500, 160), [159.9, 159.9, 159.9, 159.9]);
-  assert.deepEqual(frameTimes(-10, 160), [0, 0, 0, 0]);
-  assert.deepEqual(frameTimes(60, 160, [-20, 5]), [40, 65]);
-});
+  const seam1 = renderSeam();
+  const steps1 = await drive(start.run, seam1);
+  const asked1 = steps1.filter((s) => s.read).map((s) => `${s.read}${s.n ?? ""}`);
+  assert.deepEqual(asked1, ["probe", "panels1", "panels2", "stranger1", "stranger2"]);
+  assert.equal(steps1.filter((s) => s.rendered).length, 2);
+  assert.deepEqual(seam1.seen.map((s) => s.subjectRule), ["presence", "presence"]);
+  for (const s of seam1.seen) assert.ok(s.layouts.includes("panels"), `clip ${s.n} rendered in panels: ${s.layouts}`);
 
-test("frameName names a still by its offset; parseOffsets reads the list", () => {
-  assert.equal(frameName(-12), "frame-m12.jpg");
-  assert.equal(frameName(0), "frame-0.jpg");
-  assert.equal(frameName(2), "frame-2.jpg");
-  assert.equal(frameName(-1.5), "frame-m1.5.jpg");
-  assert.deepEqual(parseOffsets("-12,-6,0,2"), [-12, -6, 0, 2]);
-  assert.deepEqual(parseOffsets(" -3 , 4 "), [-3, 4]);
-  assert.deepEqual(parseOffsets("-6,-6,1"), [-6, 1], "a repeat is one still");
-  for (const bad of ["", "a", "1,,2", "-6,x"]) assert.throws(() => parseOffsets(bad), /--offsets/, bad);
-});
-
-test("read: meta, the top chat around the peak, chat rates and the video's length", { timeout: 60000 }, async () => {
-  const dir = await tmp();
-  try {
-    await fs.writeFile(path.join(dir, "meta.json"), JSON.stringify({ peakOffsetSec: 50, score: 80, signal: "chat" }));
-    await fs.writeFile(path.join(dir, "chat.json"), JSON.stringify(sampleChat()));
-    const noVideo = await run(["read", dir]);
-    assert.equal(noVideo.code, 0, noVideo.stdout);
-    assert.equal(noVideo.stdout.trim().split("\n").length, 1);
-    assert.deepEqual(Object.keys(noVideo.json).sort(), ["chatPerSec", "durationSec", "meta", "topChat"]);
-    assert.equal(noVideo.json.meta.score, 80);
-    assert.equal(noVideo.json.durationSec, null, "no video.mp4: no length");
-    assert.deepEqual(noVideo.json.topChat[0], { text: "hello", count: 40 });
-    assert.deepEqual(noVideo.json.topChat[1], { text: "lul", count: 15 }, "the LUL at 90 s is outside the window");
-    assert.equal(noVideo.json.chatPerSec.length, 10);
-    assert.equal(noVideo.json.chatPerSec[4], 1.7, "40-50 s: 10 hello, 4 of the LUL burst, 3 lul");
-    assert.equal(noVideo.json.chatPerSec[5], 2.3, "50-60 s: 10 hello, 8 of the LUL burst, 5 no shot");
-
-    makeVideo(path.join(dir, "video.mp4"), 3);
-    const withVideo = await run(["read", dir]);
-    assert.equal(withVideo.code, 0, withVideo.stdout);
-    assert.ok(Math.abs(withVideo.json.durationSec - 3) < 0.2, `durationSec ${withVideo.json.durationSec}`);
-    assert.equal(withVideo.json.chatPerSec.length, 1, "rates cover the file's own length");
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+  const done1 = steps1.at(-1);
+  assert.equal(done1.clips.length, 2);
+  for (const c of done1.clips) {
+    assert.ok(fs.existsSync(c.file), c.file);
+    assert.match(path.basename(c.file), /^clip-0[12]\.mp4$/);
+    assert.equal(c.noRead, undefined);
   }
+  assert.equal(done1.noRead, 0);
+  assert.equal(done1.runsLine.replace(/^\d\d:\d\d/, "HH:MM"), 'HH:MM · 86 exceptional · NO WAY ×168 · 30/s · chat spike — "NO WAY" ×168 · 2 clips');
+  assert.ok(!steps1.some((s) => s.budgetSpent));
+  const record1 = readJson(path.join(start.run, "clips.json"));
+  assert.deepEqual(record1.clips.map((c) => c.judgment.overall), [4, 4]);
+  assert.ok(!fs.existsSync(path.join(m1, "video.mp4")), "the window's video is deleted once its clips are made");
+  assert.ok(!fs.existsSync(path.join(start.run, "panels")) && !fs.existsSync(path.join(start.run, "stranger")), "the frames read are deleted");
+  assert.deepEqual(readJson(path.join(session, "panels-probe.json")), { eligible: true, isStream: true, gameTitle: "Test Game" });
+  assert.deepEqual(readJson(path.join(session, "panels-last.json")), { cameras: [CAMERA], game: GAME, focus: FOCUS, gameTitle: "Test Game" });
+  const used1 = imagesOf(session);
+  assert.ok(used1 > 6 + 2 * 2 && used1 <= 6 + 4 * 12, `images spent: ${used1}`);
+  // stepping a finished moment answers its end again
+  assert.deepEqual(await stepMoment({ run: start.run }), done1);
+
+  // ---- the second moment: the probe comes from the session; the hour is spent after its first read ----
+  const m2 = addMoment(session, "20261116-211500", { meta: { signal: "manual", score: 100, title: "clipped by hand", detail: null } });
+  const start2 = await startMoment({ moment: m2, asr: fakeAsr() });
+  writeJson(start2.answer, selection([[60, 80], [240, 260]]));
+  const seam2 = renderSeam();
+  const steps2 = await drive(start2.run, seam2, {
+    onAsk: async (r) => {
+      // The first read asked is clip 1's panels read, already paid for; then the hour is spent.
+      if (r.read === "panels" && r.n === 1) await writeSessionSettings(session, { ...defaultSettings(), visionPerHour: imagesOf(session) });
+    },
+  });
+  const asked2 = steps2.filter((s) => s.read).map((s) => `${s.read}${s.n ?? ""}`);
+  assert.deepEqual(asked2, ["panels1"], "no probe: once a session; nothing past the budget");
+  assert.ok(!fs.existsSync(path.join(start2.run, "panels", "probe")));
+  assert.equal(steps2.filter((s) => s.budgetSpent).length, 1, "one line for the chat when the budget runs out");
+  assert.deepEqual(seam2.seen.map((s) => s.subjectRule), ["presence", "presence"]);
+  for (const s of seam2.seen) assert.ok(s.layouts.includes("panels"), `clip ${s.n} rendered in panels: ${s.layouts}`);
+
+  const done2 = steps2.at(-1);
+  assert.equal(done2.clips.length, 2);
+  assert.equal(done2.noRead, 2);
+  assert.equal(done2.runsLine.replace(/^\d\d:\d\d/, "HH:MM"), "HH:MM · 100 exceptional · clipped by hand · 2 clips · no read");
+  const record2 = readJson(path.join(start2.run, "clips.json"));
+  for (const c of record2.clips) assert.equal(c.judgment.overall, 3, "a clip past the budget takes the neutral judgment");
+  const reused = record2.clips.find((c) => c.panels?.model === "reused");
+  assert.ok(reused, "the clip past the budget reuses the session's boxes");
+  const g = reused.panels.samples[0];
+  assert.deepEqual(g.cameras, [CAMERA]);
+  assert.deepEqual(g.game, GAME);
+  assert.ok(Math.abs(g.focus.x + g.focus.w / 2 - (GAME.x + GAME.w / 2)) < 1e-9 && Math.abs(g.focus.y + g.focus.h / 2 - (GAME.y + GAME.h / 2)) < 1e-9, "focus on the game panel's centre");
+  assert.equal(record2.panelProbe.isStream, true);
+
+  const runs = fs.readFileSync(path.join(home, "boqo-sniper", "runs.md"), "utf8").trim().split("\n");
+  assert.deepEqual(runs.slice(-2), [done1.runsLine, done2.runsLine]);
+  assert.deepEqual(await readTally(session), { clipped: 2, clips: 4 });
+  const status = await runCli(STATUS, ["chan"], process.env);
+  assert.equal(status.json.clipped, 2);
+  assert.equal(status.json.clips, 4);
 });
 
-test("read: a moment with no meta.json is an error", async () => {
-  const dir = await tmp();
-  try {
-    const r = await run(["read", dir]);
-    assert.equal(r.code, 1);
-    assert.match(r.json.error, /meta/);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+test("a window with no speech ends with no clips and its runs.md line", { skip }, async () => {
+  const session = await newSession("quiet");
+  const m = addMoment(session, "20261116-220000", { video: window300 });
+  const r = await startMoment({ moment: m, asr: silentAsr });
+  assert.equal(r.done, true);
+  assert.deepEqual(r.clips, []);
+  assert.equal(r.reason, "no speech");
+  assert.match(r.runsLine, / · 0 clips$/);
+  assert.match(fs.readFileSync(path.join(home, "boqo-sniper", "runs.md"), "utf8"), / · 0 clips\n$/);
 });
 
-test("words: the CLI prints the lines as one JSON line; bad flags are errors", async () => {
-  const dir = await tmp();
-  try {
-    const file = path.join(dir, "words.json");
-    await fs.writeFile(file, JSON.stringify([{ w: "Hello", s: 1, e: 1.4 }, { w: "there.", s: 1.4, e: 2 }]));
-    const r = await run(["words", file, "--around", "1", "--span", "30"]);
-    assert.equal(r.code, 0);
-    assert.deepEqual(r.json, { lines: ["[0:01] Hello there. (1.00-2.00)"] });
-    assert.equal((await run(["words", file, "--around", "x"])).code, 1);
-    assert.equal((await run(["words", file, "--nope", "1"])).code, 1);
-    assert.equal((await run(["words"])).code, 1);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+test("reused boxes: the last read's camera and game, the focus centred on the game, sized as its focus", () => {
+  const decision = {
+    status: "ok",
+    gameTitle: "G",
+    samples: [
+      { sourceSec: 1, mode: "panels", cameras: [CAMERA], game: GAME, focus: FOCUS, why: "" },
+      { sourceSec: 4, mode: "people", cameras: [CAMERA], game: null, focus: null, why: "" },
+    ],
+  };
+  const boxes = lastBoxesOf(decision);
+  assert.deepEqual(boxes, { cameras: [CAMERA], game: GAME, focus: FOCUS, gameTitle: "G" }, "the last sample WITH a game");
+  const d = reusedDecision(boxes, { start: 10, end: 16 });
+  assert.equal(d.model, "reused");
+  assert.equal(d.content, "stream_with_game");
+  assert.deepEqual(d.samples.map((s) => s.sourceSec), [10, 11.5, 13, 14.5]);
+  assert.deepEqual(d.samples[0].focus, { x: 0.4, y: 0.4, w: 0.2, h: 0.2 });
+  assert.equal(d.samples[0].mode, "panels");
+  // no focus in the last read: half the panel, centred; no camera: the game alone
+  const bare = reusedDecision({ cameras: [], game: GAME, focus: null, gameTitle: null }, { start: 0, end: 1 });
+  assert.deepEqual(bare.samples[0].focus, { x: 0.25, y: 0.25, w: 0.5, h: 0.5 });
+  assert.equal(bare.samples[0].mode, "game");
+  assert.equal(lastBoxesOf({ status: "ok", samples: [{ game: null }] }), null);
+  assert.equal(lastBoxesOf(undefined), null);
 });
 
-test("frames: a still per offset, named by it, times clamped into the video, even for a peak past its end", { timeout: 60000 }, async () => {
-  const dir = await tmp();
-  try {
-    const video = path.join(dir, "video.mp4");
-    makeVideo(video, 20);
-    const out = path.join(dir, "out dir");
-    const r = await run(["frames", video, "--at", "14", "--out", out]);
-    assert.equal(r.code, 0, r.stdout);
-    assert.deepEqual(r.json.frames.map((f) => f.at), [2, 8, 14, 16]);
-    assert.deepEqual(r.json.frames.map((f) => f.offset), [-12, -6, 0, 2]);
-    assert.deepEqual(r.json.frames.map((f) => path.basename(f.file)), ["frame-m12.jpg", "frame-m6.jpg", "frame-0.jpg", "frame-2.jpg"]);
-    for (const f of r.json.frames) assert.ok((await fs.stat(f.file)).size > 0, f.file);
+test("posted: one posts.md line a clip, today's date first, which the SKILL greps", async () => {
+  const session = await newSession("poster");
+  const m = addMoment(session, "20261116-230000", { video: null });
+  const { run } = momentPaths(m);
+  fs.mkdirSync(run, { recursive: true });
+  writeJson(path.join(run, "moment.json"), { moment: m, session, channelFolder: "twitch-poster", name: "20261116-230000" });
+  const at = new Date(2026, 10, 16, 23, 5);
+  const line = postedLine({ run, n: 1, projectId: "p-123", at });
+  assert.equal(line, `2026-11-16 23:05 | twitch-poster ${path.basename(session)} | 20261116-230000 clip-01 | posted 1 p-123`);
+  const cli = await runCli(MOMENT, ["posted", run, "--n", "2", "--none"], process.env);
+  assert.equal(cli.code, 0, cli.stdout + cli.stderr);
+  assert.match(cli.json.line, /\| 20261116-230000 clip-02 \| posted 0$/);
+  const posts = fs.readFileSync(path.join(home, "boqo-sniper", "posts.md"), "utf8").trim().split("\n");
+  assert.equal(posts.length, 2);
+  assert.equal(posts.filter((l) => l.startsWith("2026-11-16 ") && l.includes("| posted 1 ")).length, 1);
+  const bad = await runCli(MOMENT, ["posted", run, "--n", "1"], process.env);
+  assert.equal(bad.code, 1);
+  assert.match(bad.json.error, /--project/);
+});
 
-    const more = await run(["frames", video, "--at", "14", "--offsets", "-9,1", "--out", out]);
-    assert.equal(more.code, 0, more.stdout);
-    assert.deepEqual(more.json.frames.map((f) => [path.basename(f.file), f.at]), [["frame-m9.jpg", 5], ["frame-1.jpg", 15]]);
-    assert.deepEqual((await fs.readdir(out)).sort(), ["frame-0.jpg", "frame-1.jpg", "frame-2.jpg", "frame-m12.jpg", "frame-m6.jpg", "frame-m9.jpg"], "a second call adds, it does not replace");
-    assert.equal((await run(["frames", video, "--at", "1", "--offsets", "x", "--out", out])).code, 1);
-
-    const late = await run(["frames", video, "--at", "100", "--out", out]);
-    assert.equal(late.code, 0, late.stdout);
-    for (const f of late.json.frames) assert.ok((await fs.stat(f.file)).size > 0);
-
-    const missing = await run(["frames", path.join(dir, "nope.mp4"), "--at", "1", "--out", out]);
-    assert.equal(missing.code, 1);
-    assert.match(missing.json.error, /no video/);
-    assert.equal((await run(["frames", video, "--out", out])).code, 1, "--at is required");
-    assert.equal((await run(["frames", video, "--at", "1"])).code, 1, "--out is required");
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+test("the CLI: step before the selection asks for it; a folder that is no moment run is an error, exit 1", async () => {
+  const session = await newSession("cli");
+  const m = addMoment(session, "20261116-230500", { video: null });
+  const { run } = momentPaths(m);
+  fs.mkdirSync(run, { recursive: true });
+  writeJson(path.join(run, "moment.json"), { moment: m, session, channelFolder: "twitch-cli", name: "20261116-230500", meta: {} });
+  const r = await runCli(MOMENT, ["step", run], process.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.json, { write: "selection", request: path.join(run, "select-request.md"), answer: path.join(run, "selection.json") });
+  const nope = await runCli(MOMENT, ["step", path.join(home, "nowhere")], process.env);
+  assert.equal(nope.code, 1);
+  assert.match(nope.json.error, /no moment\.json/);
+  const notMoment = await runCli(MOMENT, ["start", home], process.env);
+  assert.equal(notMoment.code, 1);
+  assert.match(notMoment.json.error, /not a moment folder/);
+  const usage = await runCli(MOMENT, ["frames"], process.env);
+  assert.equal(usage.code, 1);
+  assert.match(usage.json.error, /^usage:/);
 });

@@ -25,7 +25,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { currentSession, readSessionSettings, readStatus } from "../lib/session.mjs";
 import { isAutoMoment } from "../lib/settings.mjs";
-import { scoreBand } from "../lib/bands.mjs";
+import { scoreBand } from "../engine/boqo/score-grade.mjs";
 
 export const MAX_TIMEOUT_S = 540;
 export const DEFAULT_TIMEOUT_S = 170;

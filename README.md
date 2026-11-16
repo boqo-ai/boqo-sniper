@@ -4,9 +4,10 @@ Watch a Twitch or Kick stream live on your own PC and clip the moments chat goes
 
 You name a Twitch or Kick channel (`kick:<slug>` or `kick.com/<slug>`) and your agent starts a live session. A watcher
 records the stream in the background, reads its chat and listens to its sound. When chat explodes, it cuts the last
-five minutes, with the peak about 270 s in. Your agent then transcribes the moment, selects the clips in it, and
-renders 9:16 shorts with burned-in captions and your logo. It posts a clip only by the rule you set. The session runs
-until you say stop or the stream ends.
+five minutes, with the peak about 270 s in. Your agent then runs it through boqo's Clips pipeline: it transcribes the
+moment, selects its clips, reads the stream's layout (camera and game) and judges each clip as a stranger would, and
+renders every clip, at most 10, as 9:16 shorts with burned-in captions and your logo. It posts a clip only by the rule
+you set. The session runs until you say stop or the stream ends.
 
 <!-- demo GIF -->
 
@@ -26,6 +27,8 @@ brand kit.
 - ffmpeg with libass
 - yt-dlp
 - whisper.cpp (`whisper-cli`) and a model; it writes every clip's captions
+- two npm packages, zod and onnxruntime-node (the face model; about 260 MB), installed in `~/.boqo-sniper` with your
+  yes
 
 The watcher records with yt-dlp, ads and all. streamlink, which skips Twitch's ads, is opt-in and untested in this
 beta: `"capture": "streamlink"` in `~/.boqo/boqo-sniper/config.json` turns it on.
@@ -53,7 +56,8 @@ Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai
 
 In `~/.boqo/boqo-sniper/config.json`, read when a watch starts: `sensitivity` 30 to 95 (70), `autoClip` (on),
 `autoClipMinScore` 50 to 95 (80), `windowSec` 120 to 600 (300), `prompt` (what to watch for, 300 characters),
-`visionPerHour` (600 images an hour).
+`visionPerHour` (600 images an hour, about 5 moments: past it, clips render with the last layout read and no
+judgment).
 
 ## Beta
 

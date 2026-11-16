@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runsLine } from "../lib/runs-line.mjs";
-import { scoreBand } from "../lib/bands.mjs";
+import { scoreBand } from "../engine/boqo/score-grade.mjs";
 
 const at = Date.UTC(2026, 10, 16, 21, 4, 30) / 1000;
 const chat = { chatPerSec: 30.2, chatBaseline: 2, loudness: null, loudnessBaseline: null, topMessage: "NO WAY", topCount: 168 };
