@@ -1,0 +1,109 @@
+{
+ "channels": [
+  {
+   "id": 1,
+   "slug": "xqc",
+   "chatroom": {
+    "id": 668,
+    "channel_id": 1
+   },
+   "livestream": {
+    "id": 9,
+    "viewer_count": 12400,
+    "is_live": true
+   }
+  },
+  {
+   "id": 1,
+   "slug": "xqc",
+   "chatroom": {
+    "id": 668,
+    "channel_id": 1
+   },
+   "livestream": null
+  },
+  {
+   "id": 1,
+   "slug": "xqc",
+   "chatroom": {
+    "id": 668,
+    "channel_id": 1
+   },
+   "livestream": {
+    "id": 9,
+    "viewer_count": 0,
+    "is_live": true
+   }
+  },
+  {
+   "chatroom": {
+    "id": 668
+   },
+   "livestream": {
+    "viewer_count": "12"
+   }
+  },
+  {
+   "chatroom": {
+    "id": 668
+   },
+   "livestream": {}
+  },
+  {
+   "chatroom": {
+    "id": 668
+   }
+  },
+  {
+   "chatroom": {
+    "id": "668"
+   }
+  },
+  {
+   "chatroom": {}
+  },
+  {
+   "chatroom": null
+  },
+  {
+   "chatroom": {
+    "id": 0
+   },
+   "livestream": null
+  },
+  {
+   "chatroom": {
+    "id": 668.5
+   }
+  },
+  {},
+  [],
+  null,
+  "text",
+  7,
+  true,
+  {
+   "livestream": {
+    "viewer_count": 5
+   }
+  },
+  {
+   "chatroom": {
+    "id": -1
+   },
+   "livestream": {
+    "viewer_count": -3
+   }
+  }
+ ],
+ "slugs": [
+  "xqc",
+  "x-q_c",
+  "Mixed-Case"
+ ],
+ "chatroomIds": [
+  668,
+  0,
+  12345678
+ ]
+}

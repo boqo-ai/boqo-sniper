@@ -1,0 +1,146 @@
+[
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"{\\\"id\\\": \\\"abc\\\", \\\"chatroom_id\\\": 668, \\\"content\\\": \\\"WOAH gta 5 pog\\\", \\\"type\\\": \\\"message\\\", \\\"created_at\\\": \\\"2026-11-16T10:00:00+00:00\\\", \\\"sender\\\": {\\\"id\\\": 1, \\\"username\\\": \\\"someviewer\\\", \\\"slug\\\": \\\"someviewer\\\"}}\", \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "message",
+      "text": "WOAH gta 5 pog",
+      "author": "someviewer"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": {\"id\": \"abc\", \"chatroom_id\": 668, \"content\": \"object data\", \"type\": \"message\", \"created_at\": \"2026-11-16T10:00:00+00:00\", \"sender\": {\"id\": 1, \"username\": \"someviewer\", \"slug\": \"someviewer\"}}, \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "message",
+      "text": "object data",
+      "author": "someviewer"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"{\\\"id\\\": \\\"abc\\\", \\\"chatroom_id\\\": 668, \\\"content\\\": \\\"no sender\\\", \\\"type\\\": \\\"message\\\", \\\"created_at\\\": \\\"2026-11-16T10:00:00+00:00\\\"}\", \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "message",
+      "text": "no sender",
+      "author": null
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"{\\\"id\\\": \\\"abc\\\", \\\"chatroom_id\\\": 668, \\\"content\\\": \\\"\\\", \\\"type\\\": \\\"message\\\", \\\"created_at\\\": \\\"2026-11-16T10:00:00+00:00\\\", \\\"sender\\\": {\\\"id\\\": 1, \\\"username\\\": \\\"someviewer\\\", \\\"slug\\\": \\\"someviewer\\\"}}\", \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "message",
+      "text": "",
+      "author": "someviewer"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"{\\\"id\\\": \\\"abc\\\", \\\"chatroom_id\\\": 668, \\\"content\\\": \\\"emoji [emote:123:KEKW] x\\\", \\\"type\\\": \\\"message\\\", \\\"created_at\\\": \\\"2026-11-16T10:00:00+00:00\\\", \\\"sender\\\": {\\\"username\\\": 42}}\", \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "message",
+      "text": "emoji [emote:123:KEKW] x",
+      "author": null
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"not json\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"{\\\"content\\\": 5}\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": \"null\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\ChatMessageEvent\", \"data\": {\"content\": \"x\", \"sender\": null}}",
+    "event": {
+      "kind": "message",
+      "text": "x",
+      "author": null
+    }
+  },
+  {
+    "raw": "{\"event\": \"pusher:ping\", \"data\": {}}",
+    "event": {
+      "kind": "ping"
+    }
+  },
+  {
+    "raw": "{\"event\": \"pusher_internal:subscription_succeeded\", \"data\": \"{}\", \"channel\": \"chatrooms.668.v2\"}",
+    "event": {
+      "kind": "subscribed"
+    }
+  },
+  {
+    "raw": "{\"event\": \"pusher:connection_established\", \"data\": \"{\\\"socket_id\\\":\\\"1.2\\\",\\\"activity_timeout\\\":120}\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"App\\\\Events\\\\MessageDeletedEvent\", \"data\": \"{}\"}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"event\": \"pusher:pong\", \"data\": {}}",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "not json",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "null",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "42",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "[]",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "\"str\"",
+    "event": {
+      "kind": "other"
+    }
+  },
+  {
+    "raw": "{\"data\": {}}",
+    "event": {
+      "kind": "other"
+    }
+  }
+]

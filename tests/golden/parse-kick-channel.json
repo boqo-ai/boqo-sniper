@@ -1,0 +1,223 @@
+{
+  "pusherUrl": "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false",
+  "urls": [
+    {
+      "slug": "xqc",
+      "url": "https://kick.com/api/v2/channels/xqc"
+    },
+    {
+      "slug": "x-q_c",
+      "url": "https://kick.com/api/v2/channels/x-q_c"
+    },
+    {
+      "slug": "Mixed-Case",
+      "url": "https://kick.com/api/v2/channels/Mixed-Case"
+    }
+  ],
+  "channels": [
+    {
+      "json": {
+        "id": 1,
+        "slug": "xqc",
+        "chatroom": {
+          "id": 668,
+          "channel_id": 1
+        },
+        "livestream": {
+          "id": 9,
+          "viewer_count": 12400,
+          "is_live": true
+        }
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": true,
+        "viewerCount": 12400
+      }
+    },
+    {
+      "json": {
+        "id": 1,
+        "slug": "xqc",
+        "chatroom": {
+          "id": 668,
+          "channel_id": 1
+        },
+        "livestream": null
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": false,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {
+        "id": 1,
+        "slug": "xqc",
+        "chatroom": {
+          "id": 668,
+          "channel_id": 1
+        },
+        "livestream": {
+          "id": 9,
+          "viewer_count": 0,
+          "is_live": true
+        }
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": true,
+        "viewerCount": 0
+      }
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": 668
+        },
+        "livestream": {
+          "viewer_count": "12"
+        }
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": true,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": 668
+        },
+        "livestream": {}
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": true,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": 668
+        }
+      },
+      "parsed": {
+        "chatroomId": 668,
+        "live": false,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": "668"
+        }
+      },
+      "parsed": null
+    },
+    {
+      "json": {
+        "chatroom": {}
+      },
+      "parsed": null
+    },
+    {
+      "json": {
+        "chatroom": null
+      },
+      "parsed": null
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": 0
+        },
+        "livestream": null
+      },
+      "parsed": {
+        "chatroomId": 0,
+        "live": false,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": 668.5
+        }
+      },
+      "parsed": {
+        "chatroomId": 668.5,
+        "live": false,
+        "viewerCount": null
+      }
+    },
+    {
+      "json": {},
+      "parsed": null
+    },
+    {
+      "json": [],
+      "parsed": null
+    },
+    {
+      "json": null,
+      "parsed": null
+    },
+    {
+      "json": "text",
+      "parsed": null
+    },
+    {
+      "json": 7,
+      "parsed": null
+    },
+    {
+      "json": true,
+      "parsed": null
+    },
+    {
+      "json": {
+        "livestream": {
+          "viewer_count": 5
+        }
+      },
+      "parsed": null
+    },
+    {
+      "json": {
+        "chatroom": {
+          "id": -1
+        },
+        "livestream": {
+          "viewer_count": -3
+        }
+      },
+      "parsed": {
+        "chatroomId": -1,
+        "live": true,
+        "viewerCount": -3
+      }
+    }
+  ],
+  "subscribe": [
+    {
+      "id": 668,
+      "frame": "{\"event\":\"pusher:subscribe\",\"data\":{\"auth\":\"\",\"channel\":\"chatrooms.668.v2\"}}"
+    },
+    {
+      "id": 0,
+      "frame": "{\"event\":\"pusher:subscribe\",\"data\":{\"auth\":\"\",\"channel\":\"chatrooms.0.v2\"}}"
+    },
+    {
+      "id": 12345678,
+      "frame": "{\"event\":\"pusher:subscribe\",\"data\":{\"auth\":\"\",\"channel\":\"chatrooms.12345678.v2\"}}"
+    }
+  ],
+  "ping": "{\"event\":\"pusher:ping\",\"data\":{}}",
+  "pong": "{\"event\":\"pusher:pong\",\"data\":{}}"
+}
