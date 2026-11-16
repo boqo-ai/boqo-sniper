@@ -21,7 +21,9 @@
 // a name more than a minute away from it, which is what a build that ignores
 // TZ would produce.
 //
-// Replay (tests, CI): --replay reads pre-made .ts segments in order and
+// Replay (tests, CI): --replay reads pre-made .ts segments in order, 10 s
+// apart, or as far apart as their names say when every one is named like a
+// buffer segment (seg_<UTC stamp>.ts), so a test can leave a hole; and
 // --chat lines {"t": <seconds offset>, "user", "text", "emotes"} on a simulated
 // clock that jumps instead of waiting (BOQO_SNIPER_REPLAY_SPEED=<n> makes it
 // n simulated seconds per real second). When the segments end, offline polling
@@ -41,6 +43,7 @@ import {
   HORIZON_SEC,
   POST_ROLL_SEC,
   SEGMENT_SEC,
+  chatWindowEnd,
   concatArgs,
   concatList,
   parseSegmentName,
@@ -376,6 +379,7 @@ async function main() {
 
   // Replay material is read up front so a bad path fails before anything runs.
   let replayFiles = [];
+  let replayOffsets = []; // seconds after the replay's start that each file opens at
   let replayChat = [];
   let clock;
   let replayBase = 0;
@@ -383,6 +387,10 @@ async function main() {
     try {
       replayFiles = (await fs.readdir(args.replay)).filter((f) => f.toLowerCase().endsWith(".ts")).sort();
       if (replayFiles.length === 0) throw new Error(`no .ts files in ${args.replay}`);
+      const stamps = replayFiles.map(parseSegmentName);
+      replayOffsets = stamps.every((t) => t !== null)
+        ? stamps.map((t) => t - stamps[0])
+        : replayFiles.map((_, i) => i * SEGMENT_SEC);
       if (args.chat) {
         replayChat = (await fs.readFile(args.chat, "utf8"))
           .split("\n")
@@ -516,8 +524,7 @@ async function main() {
 
   async function finishSegment(seg, next) {
     const lufs = await measureLoudness(seg.name, { cwd: bufDir });
-    const end = next ? next.t0 : seg.t0 + SEGMENT_SEC;
-    const { count, chatters } = chatWindow(seg.t0, end);
+    const { count, chatters } = chatWindow(seg.t0, chatWindowEnd(seg, next));
     seg.done = true;
     lastDoneEnd = Math.max(lastDoneEnd, seg.t0 + SEGMENT_SEC);
     const spike = detector.push({ t: seg.t0 + SEGMENT_SEC / 2, chat: count, chatters, lufs });
@@ -648,7 +655,7 @@ async function main() {
       }
     };
     for (let i = 0; i < replayFiles.length; i++) {
-      const at = replayBase + i * SEGMENT_SEC;
+      const at = replayBase + replayOffsets[i];
       if (at > clock.now()) await nap(at - clock.now());
       if (await checkStop()) return;
       feedChat(at);
@@ -656,7 +663,7 @@ async function main() {
       await tick(false);
       setState("live");
     }
-    const endAt = replayBase + replayFiles.length * SEGMENT_SEC;
+    const endAt = replayBase + replayOffsets.at(-1) + SEGMENT_SEC;
     if (endAt > clock.now()) await nap(endAt - clock.now());
     feedChat(endAt);
   }

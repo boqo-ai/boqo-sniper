@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { stamp } from "../lib/session.mjs";
+import { segmentName } from "../lib/buffer.mjs";
 
 const WATCH = fileURLToPath(new URL("../tools/watch.mjs", import.meta.url));
 const STOP = fileURLToPath(new URL("../tools/stop.mjs", import.meta.url));
@@ -34,6 +35,16 @@ async function makeSegments(dir, count) {
   assert.equal(r.status, 0, r.stderr);
   for (let i = 1; i < count; i++) await fs.copyFile(first, path.join(dir, `${String(i).padStart(3, "0")}.ts`));
 }
+
+/** Segments named by their start, `starts` seconds after an arbitrary epoch: a replay keeps their spacing, holes and all. */
+async function makeStampedSegments(dir, starts) {
+  await makeSegments(path.join(dir, "src"), 1);
+  const epoch = 1_800_000_000;
+  for (const t of starts) await fs.copyFile(path.join(dir, "src", "000.ts"), path.join(dir, segmentName(epoch + t)));
+  await fs.rm(path.join(dir, "src"), { recursive: true });
+}
+
+const range = (from, to, step = 10) => Array.from({ length: Math.ceil((to - from) / step) }, (_, i) => from + i * step);
 
 /** One message a second from 7 regulars, plus a burst of 35 different users in 300-310 s. */
 async function makeChat(file, seconds, burstAt) {
@@ -132,6 +143,53 @@ test("replay: one burst makes one ~150 s moment, then 10 offline polls end the r
     assert.equal(s.json.state, "offline");
     const n = await run(NEXT, ["chan_one", "--timeout", "5"], env);
     assert.equal(n.json.moment, dir);
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("replay: a 20 s hole in the capture fires no moment on ordinary chat", { timeout: 180000 }, async () => {
+  const work = await tmp("hole");
+  const home = path.join(work, "home");
+  try {
+    // 0 .. 190, a hole from 200 to 220, then 220 .. 410
+    await makeStampedSegments(path.join(work, "segs"), [...range(0, 200), ...range(220, 420)]);
+    // a message a second from 50 regulars in turn: 10 chatters in every 10 s, 30 in the hole's 30
+    const lines = Array.from({ length: 430 }, (_, t) => ({ t, user: `u${t % 50}`, text: "hello", emotes: 0 }));
+    await fs.writeFile(path.join(work, "chat.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100" };
+    const r = await run(WATCH, ["holey", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "holey");
+    assert.deepEqual(await fs.readdir(path.join(session, "moments")), [], "the hole is not a spike");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("replay: a burst after a hole is cut from after the hole, with peak and chat on the video's clock", { timeout: 180000 }, async () => {
+  const work = await tmp("hole-burst");
+  const home = path.join(work, "home");
+  try {
+    // 0 .. 290, a hole from 300 to 320, then 320 .. 610; the burst is in 380-390
+    await makeStampedSegments(path.join(work, "segs"), [...range(0, 300), ...range(320, 620)]);
+    await makeChat(path.join(work, "chat.jsonl"), 620, 380);
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100" };
+    const r = await run(WATCH, ["holeburst", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+    assert.equal(r.code, 0, r.stderr);
+    const session = await onlySession(home, "holeburst");
+    const names = await fs.readdir(path.join(session, "moments"));
+    assert.equal(names.length, 1, `one moment, got ${names}`);
+    const dir = path.join(session, "moments", names[0]);
+    const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
+    assert.equal(meta.peakOffsetSec, meta.peakAt - meta.startAt);
+    assert.equal(meta.peakOffsetSec, 65, "the cut starts on the segment at 320, the peak bucket is 380-390");
+    const dur = durationOf(path.join(dir, "video.mp4"));
+    assert.ok(Math.abs(dur - (meta.endAt - meta.startAt)) < 2, `video ${dur} s, wall clock ${meta.endAt - meta.startAt} s`);
+    assert.ok(dur > 95 && dur < 105, `video is ${dur} s, expected 100 (320 to 420)`);
+    const fans = JSON.parse(await fs.readFile(path.join(dir, "chat.json"), "utf8")).filter((c) => c.user.startsWith("fan"));
+    assert.equal(fans.length, 35);
+    assert.ok(fans.every((c) => c.t >= 60 && c.t < 70), "the burst sits 60-70 s into the video, as it does on the wall clock");
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }

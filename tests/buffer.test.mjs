@@ -8,7 +8,10 @@ import {
   concatArgs,
   segmentName,
   parseSegmentName,
+  chatWindowEnd,
+  GAP_SEC,
 } from "../lib/buffer.mjs";
+import { createDetector } from "../lib/detector.mjs";
 
 // n-th segment opens at t0 = 1000 + 10 n
 const segs = (count, start = 1000) => Array.from({ length: count }, (_, n) => ({ n, t0: start + 10 * n }));
@@ -71,6 +74,71 @@ test("planCut: a peak early in the buffer starts at the oldest segment", () => {
 test("planCut: nothing to cut from an empty buffer or a peak long gone", () => {
   assert.equal(planCut([], 1300), null);
   assert.equal(planCut(segs(5), 9000), null);
+});
+
+test("planCut: a gap before the peak starts the cut after it, and the peak offset counts from there", () => {
+  // 1000 .. 1190, a 20 s hole, then 1220 .. 1400
+  const s = [...segs(20), ...segs(19, 1220)];
+  const plan = planCut(s, 1300);
+  assert.equal(plan.segments[0].t0, 1220, "nothing from before the hole");
+  assert.equal(plan.startAt, 1220);
+  assert.equal(plan.segments.at(-1).t0, 1330);
+  assert.equal(plan.peakOffsetSec, 80, "the peak is 80 s into the video the kept segments make");
+});
+
+test("planCut: a gap after the peak ends the cut before it", () => {
+  const s = [...segs(20), ...segs(19, 1220)];
+  const plan = planCut(s, 1185);
+  assert.deepEqual([plan.segments[0].t0, plan.segments.at(-1).t0], [1060, 1190], "nothing from after the hole");
+  assert.equal(plan.endAt, 1200, "the run ends at 1200, short of the 30 s post-roll");
+  assert.equal(plan.peakOffsetSec, 125);
+});
+
+test("planCut: starts up to GAP_SEC apart are one run, further apart are two", () => {
+  assert.equal(GAP_SEC, 13);
+  const joined = [{ n: 0, t0: 1000 }, { n: 1, t0: 1013 }, { n: 2, t0: 1023 }];
+  assert.equal(planCut(joined, 1025).segments.length, 3);
+  const split = [{ n: 0, t0: 1000 }, { n: 1, t0: 1014 }, { n: 2, t0: 1024 }];
+  assert.deepEqual(planCut(split, 1025).segments.map((x) => x.t0), [1014, 1024]);
+  assert.equal(planCut(split, 1025).peakOffsetSec, 11);
+  // unsorted input is fine
+  assert.deepEqual(planCut([...split].reverse(), 1005).segments.map((x) => x.t0), [1000]);
+});
+
+test("chatWindowEnd: the next segment's start, but never more than SEGMENT_SEC + 1 past this one's", () => {
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1010 }), 1010);
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1011 }), 1011);
+  assert.equal(chatWindowEnd({ t0: 1000 }, { t0: 1030 }), 1011, "a 20 s hole is not this segment's chat");
+  assert.equal(chatWindowEnd({ t0: 1000 }, undefined), 1011);
+});
+
+test("a 20 s capture gap does not fire a moment on ordinary chat (the review's gap simulation)", () => {
+  // ~1.2 messages a second from 300 regulars, as the review simulated it
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const msgs = [];
+  for (let t = 0; t < 3600; t += 1) {
+    const k = rnd() < 0.2 ? 2 : 1;
+    for (let j = 0; j < k; j++) msgs.push({ t: t + rnd(), user: "u" + Math.floor(rnd() * 300) });
+  }
+  const uniq = (a, b) => new Set(msgs.filter((m) => m.t >= a && m.t < b).map((m) => m.user)).size;
+  // segment starts: every 10 s, with a 20 s hole after the one at 900
+  const starts = [];
+  for (let t = 0; t < 1800; t += t === 900 ? 30 : 10) starts.push(t);
+  const run = (windowEnd) => {
+    const d = createDetector({ sensitivity: 70 });
+    const spikes = [];
+    for (let i = 0; i < starts.length; i++) {
+      const seg = { t0: starts[i] };
+      const next = i + 1 < starts.length ? { t0: starts[i + 1] } : undefined;
+      const sp = d.push({ t: seg.t0 + 5, chat: 0, chatters: uniq(seg.t0, windowEnd(seg, next)), lufs: -20 + rnd() });
+      if (sp) spikes.push(sp);
+    }
+    return spikes;
+  };
+  const unclamped = run((seg, next) => (next ? next.t0 : seg.t0 + 10));
+  assert.ok(unclamped.some((sp) => sp.peakAt === 905), "the old window (up to the next start) fires on the hole");
+  assert.deepEqual(run(chatWindowEnd), [], "the clamped window does not");
 });
 
 test("concatList escapes single quotes and ends each line", () => {
