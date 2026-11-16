@@ -1,19 +1,20 @@
 // Doctor: looks at what this machine has (Node, ffmpeg with libass/ebur128 and
-// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, onnxruntime-node running the face model, optionally
-// streamlink) and
+// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, onnxruntime-node running the face model, the bundled
+// caption fonts, optionally streamlink) and
 // says exactly how to install what is missing, per OS. It only looks; it never
 // installs anything.
 import { spawn } from 'node:child_process';
 import { accessSync, constants, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MODEL_URL, findModel } from './asr.mjs';
 import { FaceModelError, loadBlazeFace } from './blazeface.mjs';
 import { boqoHome } from './brand.mjs';
 import { toolEnv } from './env.mjs';
 
 /**
- * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'onnxruntime'|'streamlink',
+ * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'onnxruntime'|'fonts'|'streamlink',
  *             ok: boolean, detail: string, required: boolean, cause?: 'not-installed'|'model'|'runtime' }} Check
  * (`cause` only on a failed onnxruntime check.)
  */
@@ -215,6 +216,35 @@ async function checkOnnx(load) {
   }
 }
 
+// The faces engine/fonts/ ships (engine/fonts/SOURCES.md), which libass finds by name in `fontsdir`: a missing or empty
+// file makes captions fall back to another face without an error.
+export const BUNDLED_FONTS = [
+  'Anton-Regular.ttf',
+  'ArchivoBlack-Regular.ttf',
+  'Bangers-Regular.ttf',
+  'BebasNeue-Regular.ttf',
+  'DejaVuSans-Bold.ttf',
+  'Inter-Bold.otf',
+  'LuckiestGuy-Regular.ttf',
+  'Montserrat-ExtraBold.ttf',
+  'Oswald-Bold.ttf',
+  'PermanentMarker-Regular.ttf',
+  'Poppins-Black.ttf',
+];
+const FONTS_DIR = fileURLToPath(new URL('./fonts/', import.meta.url));
+
+function checkFonts(dir = FONTS_DIR) {
+  const bad = BUNDLED_FONTS.filter((name) => {
+    try {
+      return statSync(join(dir, name)).size === 0;
+    } catch {
+      return true;
+    }
+  });
+  if (bad.length === 0) return { name: 'fonts', ok: true, detail: `${BUNDLED_FONTS.length} bundled fonts`, required: true };
+  return { name: 'fonts', ok: false, detail: `missing or empty: ${bad.join(', ')}`, required: true };
+}
+
 async function checkStreamlink(env) {
   const path = locate(env, 'streamlink');
   if (!path) return { name: 'streamlink', ok: false, detail: 'not found on PATH', required: false };
@@ -227,8 +257,8 @@ async function checkStreamlink(env) {
 /**
  * Look at the machine. Never installs anything. The tools are looked for and
  * run with `o.env` (default `toolEnv()`, which finds macOS ffmpeg-full).
- * `o.loadOnnx` replaces onnxruntime-node's loader (tests).
- * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv, loadOnnx?: () => Promise<any> }} o
+ * `o.loadOnnx` replaces onnxruntime-node's loader and `o.fontsDir` the bundled fonts' folder (tests).
+ * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv, loadOnnx?: () => Promise<any>, fontsDir?: string }} o
  * @returns {Promise<Check[]>}
  */
 export async function runChecks(o) {
@@ -243,7 +273,7 @@ export async function runChecks(o) {
     checkOnnx(o.loadOnnx),
     o.streamlink ? checkStreamlink(env) : null,
   ]);
-  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), onnx, ...(streamlink ? [streamlink] : [])];
+  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), onnx, checkFonts(o.fontsDir), ...(streamlink ? [streamlink] : [])];
 }
 
 /** True when every required check passed. */
@@ -351,6 +381,10 @@ export function hintsFor(failed, platform) {
         } else lines.push(`onnxruntime: ${c.detail}; reinstall the skill's packages: ${npm} (x64 or arm64 only)`);
         break;
       }
+      case 'fonts':
+        // `git checkout --` puts back what a clone had; `-C` and the quoted $HOME path run in PowerShell 5.1 as in a POSIX shell.
+        lines.push(`fonts: ${c.detail}; restore them with \`git -C "$HOME/.${SKILL}" checkout -- engine/fonts\``);
+        break;
       case 'streamlink':
         installs = true;
         if (p === 'darwin') lines.push('streamlink: `brew install streamlink`');

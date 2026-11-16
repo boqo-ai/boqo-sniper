@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ 5558df4; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/post.md @ 40e164e; keep in step -->
 # Posting through boqo
 
 Runs after a clip is shown (SKILL.md → The loop, step 3, and Posting). It posts only through boqo's tools, and only by
@@ -28,6 +28,10 @@ One clip at a time. `<file>` is its path, `<k>` its number.
    `passthrough: false`: say its `reasons` and skip the clip.
 2. `node "$HOME/.boqo-sniper/tools/boqo-upload.mjs" name "<the clip's title>"` gives `filename`. An error (a `-`, `_` or `/`,
    a single word): reword the title without it, and use the new title from here on.
+   `node "$HOME/.boqo-sniper/tools/boqo-upload.mjs" caption --title "<the clip's title>" --hook "<the clip's hook>"`
+   gives the words boqo's own Clips page writes for a post, `{tiktok, instagram, youtube}` (The caption). The hook is
+   the clip's `hook` in `<clips>/clips.json`; leave `--hook` out when it has none. Add `--tags a,b` only for hashtags
+   the person named.
 3. `create_upload {filename, contentType: "video/mp4", sizeBytes, kind: "post"}`. Write its reply, exactly as it came,
    to `<clips>/upload-<k>.json`. It holds signed upload URLs: never print them, quote them or put them in `runs.md`
    or `posts.md`.
@@ -40,7 +44,7 @@ One clip at a time. `<file>` is its path, `<k>` its number.
 6. `post_video {items: [{source: "<projectId>", accountIds: ["<id>", …], when: "queue"}]}`, once for this clip. It
    takes a Post project that is not ready yet, and boqo makes the post once the file is ready, so there is no need
    to wait first. `"queue"` is each account's next free slot; a time the person named is `{date: "YYYY-MM-DD", time:
-   "HH:MM"}` on the account's own clock. No `caption` (The caption) and no `uniqueize`.
+   "HH:MM"}` on the account's own clock. `caption` only as The caption says, and no `uniqueize`.
    An unclear reply (a timeout, a dropped connection, no answer): never call `post_video` again for this clip; it
    may have gone through. `list_schedule {accountId, to: <35 days from today>}` for each of its accounts: a post of
    this clip there (its title) counts as posted; none: tell the person it may not have gone out.
@@ -54,10 +58,18 @@ clip will not be posted. To look again later without a foreground `sleep` (Claud
 
 ## The caption
 
-Leave `caption` out. The post's words are then the clip's title (its upload file name) plus the account's default
-tags. Say once, the first time you post: a caption written here needs "Captions written by the agent" switched on in
-boqo (Accounts, the account, Defaults). Only after the person says it is on, pass `caption` in step 6, in words they
-approved. A refusal naming that setting: post again without `caption`.
+Boqo writes a post's words from the file name: the clip's title, plus the account's default tags. Hosted's own
+Clips page writes more: the clip's hook, then its title, then the tags, each after a blank line (the `caption`
+command in step 2; YouTube's title is the clip's title, its description the hook and the tags). Those words need
+"Captions written by the agent" switched on in boqo (Accounts, the account, Defaults).
+- **Not on, or not known:** leave `caption` out. The post says the title and the account's tags. The first time, say
+  this one sentence and no more: "These posts carry only each clip's title and the account's tags; switch on
+  'Captions written by the agent' in boqo (Accounts, the account, Defaults) and they carry the hook too."
+- **On** (the person says so): pass `caption` in step 6, one for the clip: the `text` of `youtube` when every chosen
+  account is on YouTube, else the `text` of `instagram` (it fits TikTok and YouTube too). Show the words in the
+  one line of step 7. A caption written this way carries only the tags you gave `--tags`: boqo adds none of the
+  account's own.
+A refusal naming that setting: post again without `caption`.
 
 ## Refusals
 

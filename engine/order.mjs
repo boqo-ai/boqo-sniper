@@ -59,6 +59,34 @@ export function renderSet(clips, n = RENDER_FIRST) {
   return preRenderOrder(clips).slice(0, n).map((c) => c.n);
 }
 
+const wholeNumber = (v) => (/^[1-9][0-9]*$/.test(String(v).trim()) ? Number(v) : null);
+
+/**
+ * The rows of a run's record that a render (or the fetch of their sections) is asked for, by `n`, in `n` order:
+ * `all`, the numbers in `n` ("1,2,3"), or the first `first` (default RENDER_FIRST). Throws an Error with a one-line
+ * message for a bad count, a number the record does not have, or more than one of the three.
+ * @param {{ clips: object[] }} record
+ * @param {{ n?: string, all?: boolean, first?: string|number }} opt
+ */
+export function selectRows(record, opt = {}) {
+  const chosen = [opt.n !== undefined, opt.all === true, opt.first !== undefined].filter(Boolean).length;
+  if (chosen > 1) throw new Error('give at most one of --n, --all and --first');
+  const rows = record.clips.filter((r) => Number.isInteger(r?.n)).sort((a, b) => a.n - b.n);
+  if (opt.all) return rows;
+  if (opt.n !== undefined) {
+    const ns = String(opt.n).split(',').map(wholeNumber);
+    if (ns.some((x) => x === null)) throw new Error('--n takes clip numbers, like --n 1,2,3');
+    return [...new Set(ns)].sort((a, b) => a - b).map((n) => {
+      const row = rows.find((r) => r.n === n);
+      if (!row) throw new Error(`clips.json has no clip ${n}`);
+      return row;
+    });
+  }
+  const first = opt.first === undefined ? RENDER_FIRST : wholeNumber(opt.first);
+  if (first === null) throw new Error('--first takes a count, like --first 10');
+  return rows.filter((r) => r.n <= first);
+}
+
 const clock = (sec) => {
   const s = Math.max(0, Math.round(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

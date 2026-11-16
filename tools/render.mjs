@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { loadBlazeFace } from '../engine/blazeface.mjs';
 import { defaultBrand, defaultBrandName, loadBrand } from '../engine/brand.mjs';
-import { JOURNAL, RENDER_FIRST, writeAtomic } from '../engine/order.mjs';
+import { JOURNAL, selectRows, writeAtomic } from '../engine/order.mjs';
 import { PanelsError, sourceOf } from '../engine/panels-read.mjs';
 import { realExec, renderClip } from '../engine/render.mjs';
 
@@ -69,22 +69,13 @@ function parse(argv) {
   return opt;
 }
 
-const whole = (v) => (/^[1-9][0-9]*$/.test(String(v).trim()) ? Number(v) : null);
-
 // The rows to render, by n, in n order.
 function pick(record, opt) {
-  const chosen = [opt.n !== undefined, opt.all === true, opt.first !== undefined].filter(Boolean).length;
-  if (chosen > 1) fail('give at most one of --n, --all and --first');
-  const rows = record.clips.filter((r) => Number.isInteger(r?.n)).sort((a, b) => a.n - b.n);
-  if (opt.all) return rows;
-  if (opt.n !== undefined) {
-    const ns = String(opt.n).split(',').map(whole);
-    if (ns.some((x) => x === null)) fail('--n takes clip numbers, like --n 1,2,3');
-    return [...new Set(ns)].sort((a, b) => a - b).map((n) => rows.find((r) => r.n === n) ?? fail(`clips.json has no clip ${n}`));
+  try {
+    return selectRows(record, opt);
+  } catch (err) {
+    return fail(err.message);
   }
-  const first = opt.first === undefined ? RENDER_FIRST : whole(opt.first);
-  if (first === null) fail('--first takes a count, like --first 10');
-  return rows.filter((r) => r.n <= first);
 }
 
 // A path stored in clips.json: relative to the run, with forward slashes.

@@ -163,6 +163,9 @@ Repeat until The end.
       ```sh
       node "$HOME/.boqo-sniper/tools/moment.mjs" step "<clips>"
       ```
+      - **A background notice** instead of the JSON (Claude Code backgrounds a command after about 180 s): `start` or
+        `step` is still running. Wait for its completion and read its output; never run a second `start` or `step`
+        on the same `<clips>` while one runs.
       - `{"write": "selection", "errors": [...]}`: each error is `clips[i].field: what is wrong`, `clips[0]` being
         the first clip. Fix them in `<clips>/selection.json`, then step.
       - `{"read": "probe" | "panels" | "stranger", "turn", "answer", "doc"}`: the prompt is in `doc` (`panels.md` or

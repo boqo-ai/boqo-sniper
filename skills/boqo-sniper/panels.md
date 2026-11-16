@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/panels.md @ 94955bd; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/panels.md @ 40e164e; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/panels/prompt.ts @ bcc9d99cc; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/panels/probe.ts @ bcc9d99cc; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/panels/decide.ts @ bcc9d99cc; keep in step -->

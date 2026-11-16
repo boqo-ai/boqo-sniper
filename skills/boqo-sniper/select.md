@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/select.md @ 94955bd; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/select.md @ 40e164e; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/select/prompt.ts @ bcc9d99cc; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/select/anthropic.ts @ bcc9d99cc; keep in step -->
 # Selecting the clips
@@ -68,6 +68,13 @@ Emphasis words: the words within the clip that a viewer should catch, which the 
 
 Return clips ordered by score, highest first, and do not return two clips covering the same moment.
 <!-- rubric ends -->
+
+## Where the words show
+
+The kit chooses what the clip's title plate says, `headline.source` (`brand.mjs show` prints it). The Default kit's
+plate says the **title** for the first seconds of the clip; a kit with `source: "hook"` shows the **hook** instead.
+Write the one the kit shows to be read on screen, in a few words; the other is for the post (the caption starts with
+the hook). A kit with `"headline": null` draws no plate: the title and the hook are for the post only.
 
 ## The answer
 
