@@ -1,0 +1,16 @@
+[
+ { "signal": "chat", "detail": { "chatPerSec": 30, "chatBaseline": 3.6, "loudness": -26.2, "loudnessBaseline": -25, "topMessage": "NO WAY", "topCount": 168 } },
+ { "signal": "chat", "detail": { "chatPerSec": 25.4, "chatBaseline": 3.5, "loudness": -24.6, "loudnessBaseline": -24.9, "topMessage": null, "topCount": 0 } },
+ { "signal": "chat", "detail": { "chatPerSec": 2.5, "chatBaseline": 1, "loudness": null, "loudnessBaseline": null, "topMessage": null, "topCount": 0 } },
+ { "signal": "chat", "detail": { "chatPerSec": 0.4, "chatBaseline": 0.2, "loudness": null, "loudnessBaseline": null, "topMessage": null, "topCount": 0 } },
+ { "signal": "chat", "detail": { "chatPerSec": 12.2, "chatBaseline": 3, "loudness": null, "loudnessBaseline": null, "topMessage": "CLIP IT", "topCount": 2 } },
+ { "signal": "chat", "detail": { "chatPerSec": 9.6, "chatBaseline": 3, "loudness": null, "loudnessBaseline": null, "topMessage": "W", "topCount": 40, "chatUnit": "chatters" } },
+ { "signal": "chat", "detail": { "chatPerSec": 9.6, "chatBaseline": 3, "loudness": null, "loudnessBaseline": null, "topMessage": null, "topCount": 0, "chatUnit": "chatters" } },
+ { "signal": "audio", "detail": { "chatPerSec": 3, "chatBaseline": 3.7, "loudness": -8, "loudnessBaseline": -25.08, "topMessage": null, "topCount": 0 } },
+ { "signal": "audio", "detail": { "chatPerSec": 0, "chatBaseline": 3.5, "loudness": -28, "loudnessBaseline": -25.2, "topMessage": null, "topCount": 0 } },
+ { "signal": "audio", "detail": { "chatPerSec": 0, "chatBaseline": 3.5, "loudness": -25.4, "loudnessBaseline": -25, "topMessage": null, "topCount": 0 } },
+ { "signal": "audio", "detail": { "chatPerSec": 0, "chatBaseline": 0, "loudness": -8, "loudnessBaseline": null, "topMessage": null, "topCount": 0 } },
+ { "signal": "audio", "detail": { "chatPerSec": 4, "chatBaseline": 3, "loudness": null, "loudnessBaseline": -25, "topMessage": "x", "topCount": 5 } },
+ { "signal": "manual", "detail": { "chatPerSec": 0, "chatBaseline": 0, "loudness": null, "loudnessBaseline": null, "topMessage": null, "topCount": 0 } },
+ { "signal": "chat", "detail": null }
+]

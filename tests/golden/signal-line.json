@@ -1,0 +1,165 @@
+[
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 30,
+      "chatBaseline": 3.6,
+      "loudness": -26.2,
+      "loudnessBaseline": -25,
+      "topMessage": "NO WAY",
+      "topCount": 168
+    },
+    "line": "NO WAY ×168 · 30/s"
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 25.4,
+      "chatBaseline": 3.5,
+      "loudness": -24.6,
+      "loudnessBaseline": -24.9,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": "25/s"
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 2.5,
+      "chatBaseline": 1,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": "3/s"
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 0.4,
+      "chatBaseline": 0.2,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": null
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 12.2,
+      "chatBaseline": 3,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": "CLIP IT",
+      "topCount": 2
+    },
+    "line": "CLIP IT ×2 · 12/s"
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 9.6,
+      "chatBaseline": 3,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": "W",
+      "topCount": 40,
+      "chatUnit": "chatters"
+    },
+    "line": "W ×40 · 10 chatters/s"
+  },
+  {
+    "signal": "chat",
+    "detail": {
+      "chatPerSec": 9.6,
+      "chatBaseline": 3,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": null,
+      "topCount": 0,
+      "chatUnit": "chatters"
+    },
+    "line": "10 chatters/s"
+  },
+  {
+    "signal": "audio",
+    "detail": {
+      "chatPerSec": 3,
+      "chatBaseline": 3.7,
+      "loudness": -8,
+      "loudnessBaseline": -25.08,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": "Audio +17 LU"
+  },
+  {
+    "signal": "audio",
+    "detail": {
+      "chatPerSec": 0,
+      "chatBaseline": 3.5,
+      "loudness": -28,
+      "loudnessBaseline": -25.2,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": "Audio −3 LU"
+  },
+  {
+    "signal": "audio",
+    "detail": {
+      "chatPerSec": 0,
+      "chatBaseline": 3.5,
+      "loudness": -25.4,
+      "loudnessBaseline": -25,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": "Audio +0 LU"
+  },
+  {
+    "signal": "audio",
+    "detail": {
+      "chatPerSec": 0,
+      "chatBaseline": 0,
+      "loudness": -8,
+      "loudnessBaseline": null,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": null
+  },
+  {
+    "signal": "audio",
+    "detail": {
+      "chatPerSec": 4,
+      "chatBaseline": 3,
+      "loudness": null,
+      "loudnessBaseline": -25,
+      "topMessage": "x",
+      "topCount": 5
+    },
+    "line": null
+  },
+  {
+    "signal": "manual",
+    "detail": {
+      "chatPerSec": 0,
+      "chatBaseline": 0,
+      "loudness": null,
+      "loudnessBaseline": null,
+      "topMessage": null,
+      "topCount": 0
+    },
+    "line": null
+  },
+  {
+    "signal": "chat",
+    "detail": null,
+    "line": null
+  }
+]
