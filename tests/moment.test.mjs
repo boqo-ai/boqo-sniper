@@ -12,7 +12,19 @@ import { fileURLToPath } from "node:url";
 import { toolEnv } from "../engine/env.mjs";
 import { renderClip } from "../engine/render.mjs";
 import { segmentsFromWords } from "../engine/segments.mjs";
-import { lastBoxesOf, momentPaths, postedLine, reusedDecision, startMoment, stepMoment } from "../lib/moment-run.mjs";
+import {
+  MAX_CLIP_OVERLAP_RATIO,
+  lastBoxesOf,
+  momentPaths,
+  overlapDrops,
+  overlapRatio,
+  postedLine,
+  reusedDecision,
+  sessionClips,
+  startMoment,
+  stepMoment,
+  windowStart,
+} from "../lib/moment-run.mjs";
 import { defaultSettings } from "../lib/settings.mjs";
 import { newSession, readTally, visionFile, writeSessionSettings } from "../lib/session.mjs";
 
@@ -266,6 +278,86 @@ test("a window with no speech ends with no clips and its runs.md line", { skip }
   assert.equal(r.reason, "no speech");
   assert.match(r.runsLine, / · 0 clips$/);
   assert.match(fs.readFileSync(path.join(home, "boqo-sniper", "runs.md"), "utf8"), / · 0 clips\n$/);
+});
+
+// ---- clips an earlier moment of the session already made (a deviation from hosted, which clips both) ----
+
+test("overlap: hosted's rule (more than 25% of the shorter, strictly), on the wall clock, against the session's made clips", () => {
+  const snap = fs.readFileSync(fileURLToPath(new URL("../engine/boqo/snap.mjs", import.meta.url)), "utf8");
+  assert.match(snap, /^const MAX_CLIP_OVERLAP_RATIO = 0\.25;$/m, "the engine's (hosted's) ratio, which snap.mjs does not export");
+  assert.equal(MAX_CLIP_OVERLAP_RATIO, 0.25);
+  assert.equal(overlapRatio({ startSec: 0, endSec: 40 }, { startSec: 30, endSec: 70 }), 0.25);
+  assert.equal(overlapRatio({ startSec: 0, endSec: 10 }, { startSec: 10, endSec: 20 }), 0);
+  assert.equal(overlapRatio({ startSec: 0, endSec: 100 }, { startSec: 20, endSec: 30 }), 1, "a clip inside another");
+
+  assert.equal(windowStart({ startAt: 1000, peakAt: 1270, peakOffsetSec: 270 }), 1000);
+  assert.equal(windowStart({ peakAt: 1270, peakOffsetSec: 270 }), 1000, "a meta with no startAt: the peak less its offset");
+  assert.equal(windowStart({ peakAt: 1270 }), null);
+
+  // an earlier moment's clip made 1100-1140 on the wall clock; this window starts at 1060, so it is 40-80 here
+  const made = [{ moment: "20261116-100000", n: 1, title: "Earlier", startAt: 1100, endAt: 1140 }];
+  const rows = [
+    { n: 1, start: 50, end: 70, title: "Inside it" },
+    { n: 2, start: 70, end: 110, title: "A quarter of it" }, // 10 s of 40: exactly 25%, kept
+    { n: 3, start: 69.9, end: 109.9, title: "Just over" }, // 10.1 s of 40: dropped
+    { n: 4, start: 200, end: 230, title: "Clear" },
+    { n: 5, start: 40, end: 80, title: "Rendered already", rendered: true }, // a row already rendered is never dropped
+  ];
+  const drops = overlapDrops(rows, made, 1060);
+  assert.deepEqual(drops.map((d) => d.row.n), [1, 3]);
+  assert.deepEqual(drops[0].overlaps, { moment: "20261116-100000", clip: 1, title: "Earlier" });
+  assert.deepEqual(overlapDrops(rows, made, null), [], "a window with no start on the clock is compared with nothing");
+});
+
+test("a moment's clips that an earlier moment of the session already made are dropped before render, and the request says where they are", { skip, timeout: 300_000 }, async () => {
+  const session = await newSession("ovl");
+  const other = await newSession("ovl", new Date(Date.UTC(2026, 10, 15, 9)));
+  // no frames read: the probe is the session's, already made
+  writeJson(path.join(session, "panels-probe.json"), { eligible: false });
+  const T0 = 1_800_000_000;
+  const madeRun = (sess, name, clips) => {
+    const run = path.join(home, "boqo-sniper", "clips", "twitch-ovl", name);
+    fs.mkdirSync(run, { recursive: true });
+    writeJson(path.join(run, "moment.json"), { moment: path.join(sess, "moments", name), session: sess, channelFolder: "twitch-ovl", name, meta: { startAt: T0 } });
+    writeJson(path.join(run, "clips.json"), { clips });
+  };
+  // the earlier moment of this session: clip 1 made at T0+100..T0+140; clip 2 never rendered
+  madeRun(session, "20261116-100000", [
+    { n: 1, start: 100, end: 140, title: "The stealth potion", rendered: true },
+    { n: 2, start: 200, end: 240, title: "Not rendered", rendered: false },
+  ]);
+  // another session's moment over the same seconds: not this session's, so not compared
+  madeRun(other, "20261115-090500", [{ n: 1, start: 160, end: 300, title: "Yesterday", rendered: true }]);
+  assert.deepEqual(sessionClips({ session, channelFolder: "twitch-ovl", exclude: "20261116-100400" }), [
+    { moment: "20261116-100000", n: 1, title: "The stealth potion", startAt: T0 + 100, endAt: T0 + 140 },
+  ]);
+
+  // this moment's window starts 60 s later: the made clip is 40-80 s of it
+  const m = addMoment(session, "20261116-100400", { meta: { startAt: T0 + 60, peakAt: T0 + 330, peakOffsetSec: 270 } });
+  const start = await startMoment({ moment: m, asr: fakeAsr() });
+  const request = fs.readFileSync(start.request, "utf8");
+  assert.match(request, /\nAlready clipped in this session, from an earlier moment: 40\.0–80\.0 s of this video\. A clip that overlaps one of these by more than 25% of the shorter is dropped before render\.\n$/);
+  writeJson(start.answer, selection([[48, 72], [200, 224]]));
+
+  const rendered = [];
+  const render = async ({ run, row }) => {
+    rendered.push(row.title);
+    const file = path.join(run, "out", `clip-${String(row.n).padStart(2, "0")}.mp4`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "not a video");
+    fs.writeFileSync(file.replace(/\.mp4$/, ".jpg"), "not a picture");
+    return { file, thumb: file.replace(/\.mp4$/, ".jpg"), seconds: row.end - row.start, notes: [], window: null, cuts: [] };
+  };
+  const steps = await drive(start.run, { render, loadDetector: async () => undefined });
+  const done = steps.at(-1);
+  assert.deepEqual(rendered, ["Clip 2"], "the overlapping clip was never rendered");
+  assert.equal(done.clips.length, 1);
+  assert.equal(done.overlapped.length, 1);
+  const [o] = done.overlapped;
+  assert.equal(o.title, "Clip 1");
+  assert.deepEqual(o.overlaps, { moment: "20261116-100000", clip: 1, title: "The stealth potion" });
+  assert.ok(o.start >= 44 && o.end <= 76, `the dropped clip's span: ${o.start}-${o.end}`);
+  assert.deepEqual(readJson(path.join(start.run, "clips.json")).clips.map((c) => c.title), ["Clip 2"]);
 });
 
 test("reused boxes: the last read's camera and game, the focus centred on the game, sized as its focus", () => {
