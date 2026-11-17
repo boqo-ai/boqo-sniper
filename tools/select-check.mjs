@@ -9,7 +9,8 @@
 //   <run>/select-options.json (written by select-request.mjs: the length band).
 //   --length  overrides the length preset of select-options.json (auto when neither)
 //   --lang    the transcript's language code when info.json does not say
-//   Prints {"ok":true,"kept":n,"dropped":{reason:count}} and exits 0, or
+//   Prints {"ok":true,"kept":n,"dropped":{reason:count},"dropped_clips":[{clip,start,end,reason}]} and exits 0
+//   (clip is the place in selection.json's clips, 1 for the first; dropped_clips is absent when none was dropped), or
 //   {"ok":false,"errors":[...]} and exits 1 (a stale clips.json is removed). The
 //   agent fixes selection.json and runs it again. Paths in errors are
 //   selection.json's: clips[0] is the first clip.
@@ -83,7 +84,7 @@ function main(argv) {
   } catch (err) {
     stop([`cannot write clips.json: ${err.code ?? err.message}`]);
   }
-  say({ ok: true, kept: result.record.clips.length, dropped: result.dropped }, 0);
+  say({ ok: true, kept: result.record.clips.length, dropped: result.dropped, ...(result.droppedClips.length ? { dropped_clips: result.droppedClips } : {}) }, 0);
 }
 
 main(process.argv.slice(2));

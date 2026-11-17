@@ -15,6 +15,7 @@ import { BrandHeadline, headlineStyleFor, headlineText, headlineWindow } from '.
 import { buildHeadlineAss } from './boqo/headline-ass.mjs';
 import { logoChain, logoFits, logoOverlayPosition, shiftLogoTiming } from './boqo/brand-logo.mjs';
 import { DEFAULT_OUTPUT } from './captions.mjs';
+import { routeScriptFaces } from './script-faces.mjs';
 
 /**
  * boqo's Default brand template's headline (the `brand_templates` row with `is_platform_preset`, read 2026-11-16; spec
@@ -113,7 +114,8 @@ export function headlineTrack(o) {
   const text = headlineText(parsed.data, { title, hook });
   if (text === null) return null;
   const { ass, layout } = buildHeadlineAss(text, parsed.data, durationSec, frame, leadSec, headlineStyleFor(parsed.data));
-  return { ass, layout, text };
+  // The skill's one step after the copy: a Devanagari run drawn in the bundled Devanagari face (engine/script-faces.mjs).
+  return { ass: routeScriptFaces(ass), layout, text };
 }
 
 /**
@@ -121,7 +123,7 @@ export function headlineTrack(o) {
  * pipeline.ts hands `panelsTextElements` and `buildTextAss` (its `drawable` over the clip's one text element, the
  * brand headline: `range` null, so its span is `elementSpan`'s, the headline's own window), or `null` when it draws
  * none: no headline block, an empty source, or a window with nothing inside the clip (`elementSpan` null).
- * `buildTextAss([element], durationSec, output)` on it writes the file `headlineTrack` writes.
+ * `routeScriptFaces(buildTextAss([element], durationSec, output))` on it writes the file `headlineTrack` writes.
  *
  * Takes `headlineTrack`'s `title`, `hook`, `headline` and `durationSec`.
  */

@@ -15,6 +15,12 @@
 //   4. build     `buildCaptions(words, preset, output, sceneCuts, emphasis)`.
 // Hosted's caption edits, hook replays and per-clip overrides have no counterpart in the skill.
 //
+// Two deliberate deviations from hosted, each the skill's own step around the copies (E2-fix3):
+//   - a number keeps the `.`, `,` or `:` between two of its digits ("3.1", "4:30", "12,000") in a style that strips
+//     punctuation (`holdNumberMarks`); hosted's `captionText` strips them, so its captions read "31", "430", "12000";
+//   - a Devanagari run is drawn in the bundled Noto Sans Devanagari, and a file in a script that needs shaping is
+//     burned with complex shaping (engine/script-faces.mjs).
+//
 // Not held by a golden of its own: tests/captions.test.mjs holds `captionsTrack` to boqo's own steps 1, 2 and 4
 // (golden caption-track). Imports no child_process.
 import { fileURLToPath } from 'node:url';
@@ -24,6 +30,7 @@ import { emphasisKey } from './boqo/caption-words.mjs';
 import { buildCaptions } from './boqo/captions.mjs';
 import { wordsThroughCuts } from './boqo/cut-map.mjs';
 import { wordsWithin } from './boqo/words.mjs';
+import { SCRIPT_FACES, needsComplexShaping, routeScriptFaces } from './script-faces.mjs';
 
 /** The folder of bundled fonts, for libass's `fontsdir`. */
 export const FONTS_DIR = fileURLToPath(new URL('./fonts/', import.meta.url));
@@ -60,9 +67,12 @@ export const BUNDLED_FACES = Object.freeze({
 // differ from the clip's word by its quote marks alone.
 const QUOTE_MARKS = /["'`´‘’‚‛“”„‟′″‹›«»]/g;
 
-/** The form two spellings are compared in here: NFKC, every quote mark one `'`, then hosted's `emphasisKey`. */
+/**
+ * The form two spellings are compared in here: NFKC, every quote mark one `'`, a held number mark dropped (as hosted's
+ * `emphasisKey` drops the mark itself, so "7,200" and the held "7,200" compare equal), then hosted's `emphasisKey`.
+ */
 export function tolerantKey(raw) {
-  return emphasisKey(String(raw).normalize('NFKC').replace(QUOTE_MARKS, "'"));
+  return emphasisKey(String(raw).normalize('NFKC').replace(QUOTE_MARKS, "'").replace(HELD_MARK, ''));
 }
 
 /**
@@ -86,6 +96,26 @@ export function emphasisForWords(emphasis, words) {
     out.push(w.word);
   }
   return out;
+}
+
+// DELIBERATE DEVIATION FROM HOSTED (E2-fix3). hosted's `captionText` (engine/boqo/caption-words.mjs, verbatim) strips
+// `.`, `,` and `:` wherever they stand in a word when the style strips punctuation, so a number lost its own marks:
+// "3.1" read "31", "4:30" "430", "55.5" "555" on the evaluation clips. Between two digits each mark is swapped for a
+// private-use character the stripper leaves alone, before the words reach the copies, and swapped back in the ASS they
+// write. The layout measures a held mark at the face's `fallbackAdvance`, wider than the mark it stands for, so a line
+// holding one is measured a little wide and never overflows for it. Every other mark the style strips stays stripped.
+const NUMBER_MARKS = Object.freeze({ '.': '\uE000', ',': '\uE001', ':': '\uE002' });
+const HELD_MARK = /[\uE000-\uE002]/g;
+const RELEASE = new Map(Object.entries(NUMBER_MARKS).map(([mark, held]) => [held, mark]));
+
+/** `word` with each `.`, `,` or `:` between two digits held (a private-use stand-in the punctuation stripper keeps). */
+export function holdNumberMarks(word) {
+  return String(word).replace(/(?<=\p{Nd})[.,:](?=\p{Nd})/gu, (c) => NUMBER_MARKS[c]);
+}
+
+/** `text` with every held mark back as the mark it stands for. */
+export function releaseNumberMarks(text) {
+  return String(text).replace(HELD_MARK, (c) => RELEASE.get(c));
 }
 
 const fail = (msg) => {
@@ -145,8 +175,12 @@ export function captionsTrack(o) {
     if (w.end > clipStart && w.start < clipEnd) indexed.push({ ...w, index });
   });
   const words = wordsThroughCuts(wordsWithin(indexed, clipStart, clipEnd), cuts);
-  const built = buildCaptions(words, preset, output, sceneCuts, emphasisForWords(emphasis, words));
-  return { ...built, preset, words };
+  // The two deviations from hosted (see the header): number marks held through a stripping style, Devanagari routed.
+  const holds = preset.stripPunctuation === true;
+  const drawn = holds ? words.map((w) => ({ ...w, word: holdNumberMarks(w.word) })) : words;
+  const built = buildCaptions(drawn, preset, output, sceneCuts, emphasisForWords(emphasis, drawn));
+  const ass = routeScriptFaces(holds ? releaseNumberMarks(built.ass) : built.ass);
+  return { ...built, ass, preset, words };
 }
 
 /**
@@ -178,14 +212,26 @@ export function filterPath(path) {
   return options.replace(/[\\'[\],;]/g, (c) => `\\${c}`);
 }
 
-/** The `subtitles` filter that burns `assPath` with the faces in `fontsDir` (both escaped by `filterPath`). */
-export function subtitlesFilter(assPath, fontsDir = FONTS_DIR) {
+/**
+ * The filter that burns `assPath` with the faces in `fontsDir` (both escaped by `filterPath`): boqo's `subtitles`
+ * filter, or with `complex` (the file holds text `needsComplexShaping` names) the `ass` filter at `shaping=complex`.
+ * The `subtitles` filter shapes with libass's simple shaper and has no option to change it, which draws Devanagari
+ * wrongly (engine/script-faces.mjs, measured); both filters are libass's and ship together. A file with no such text
+ * keeps the `subtitles` filter, so its pixels stay hosted's.
+ */
+export function subtitlesFilter(assPath, fontsDir = FONTS_DIR, { complex = false } = {}) {
+  if (complex) return `ass=filename=${filterPath(assPath)}:fontsdir=${filterPath(fontsDir)}:shaping=complex`;
   return `subtitles=filename=${filterPath(assPath)}:fontsdir=${filterPath(fontsDir)}`;
+}
+
+/** The filter that burns the ASS `ass`, written at `assPath`: `subtitlesFilter`, complex when its text needs it. */
+export function textPassFilter(assPath, ass, fontsDir = FONTS_DIR) {
+  return subtitlesFilter(assPath, fontsDir, { complex: needsComplexShaping(ass) });
 }
 
 /**
  * The lines of an ffmpeg log (at `-loglevel verbose` or above) that show libass drawing with a face other than the
- * bundled one: a `fontselect:` line resolving a family to anything but its bundled face (a system font by its path,
+ * bundled one (a style's face, or a script's, `SCRIPT_FACES`): a `fontselect:` line resolving a family to anything but its bundled face (a system font by its path,
  * another face, the wrong instance), or naming a family with no bundled face, or saying it found no fallback; a glyph
  * the face lacks (`Glyph 0x… not found, selecting one more font`, after which libass draws it from some other font);
  * a font file libass could not open. Empty when every face came from `fontsdir`. libass logs no error for the first
@@ -198,7 +244,7 @@ export function fontFallbacks(log) {
   for (const line of String(log).split(/\r?\n/)) {
     const m = /fontselect: \((.+), (\d+), (\d+)\) -> (.*), (-?\d+), (.*)$/.exec(line);
     if (m) {
-      const face = BUNDLED_FACES[m[1]];
+      const face = BUNDLED_FACES[m[1]] ?? SCRIPT_FACES[m[1]];
       if (!face || m[4].trim() !== face.postscript || m[6].trim() !== face.postscript) out.push(line.trim());
     } else if (/fontselect:|Glyph 0x[0-9A-Fa-f]+ not found|Error opening font/.test(line)) {
       out.push(line.trim());

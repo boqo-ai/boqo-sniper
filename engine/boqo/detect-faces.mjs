@@ -449,25 +449,52 @@ export function chunk_frames(frame_size, chunk_bytes = SHOT_FRAMES_CHUNK_BYTES) 
  * shot_frames' ffmpeg command and the frame size it produces, `out` being where the raw frames go (Python: "-",
  * stdout). Split out of shot_frames so the argv is held by a golden.
  *
- * (Port: with `chunk` = `{ first, frames }`, the command for one chunk: the same command, with
- * `select='gte(n,first)'` after `fps` and `-frames:v frames` before the output. `n` counts the fps filter's output,
- * so the chunk is that same stream from sample `first` on, cut after `frames`, pixels and timestamps untouched:
- * the chunks of a shot, laid end to end, are byte for byte the one-pass output (measured 2026-11-16 on ffmpeg 7.0.2
- * and 8.1.3, B-frame sources at 29.97 fps, rates of 2 to 7.5 Hz, chunks of 1 to 23 frames; tests/faces.test.mjs
- * checks it against the ffmpeg on the PATH). A `setpts` there would NOT be: the output `-t` would then cut each
- * chunk at a different frame.)
+ * (Port: with `chunk` = `{ first, frames }`, the command for one chunk, the one-pass output from its frame `first`
+ * on, cut after `frames` by `-frames:v`. The first chunk (`first` 0) is the one-pass command and nothing else. A later
+ * chunk adds `trim=duration=<-t>,select='gte(pts,first)'` after `fps` and `-fps_mode passthrough` with the output's
+ * options:
+ * - The one-pass output's frame i is the frame `fps` stamps i (its time base is one sample), because the default
+ *   output mode for rawvideo is constant-rate. Selecting on `n` instead would be off by `fps`'s first stamp when the
+ *   video starts after the shot does: measured 2026-11-16 on ffmpeg 8.1.3, video starting 1.5 s after the audio at
+ *   2 Hz, the one-pass output opens with copies of its first frame to fill stamps 0-2, `pts` matches it, `n` is 3
+ *   frames late. Not covered: video starting later than the whole first chunk (23 samples at 1280x720, 11.5 s at
+ *   2 Hz), where the second chunk would lack the copies the one pass still has at its start.
+ * - `-fps_mode passthrough` because a constant-rate output fills from 0 to the first frame it receives, so a chunk
+ *   starting at stamp k came out as k copies of its first frame before any other. ffmpeg's default mode is
+ *   constant-rate unless the input file has exactly one stream (then "Not duplicating N initial frames" in its
+ *   debug log), so this hit every source with an audio track and no test video without one. Measured 2026-11-16 on
+ *   ffmpeg 8.1.3: the E2 gate's real stream-copied windows (AV1 with Opus, first packet at -3.52 s), a chunk from
+ *   frame 23 gave 24 copies of one picture and kept writing past the shot's end; the same window with its audio
+ *   stream removed (still starting at -3.52 s) gave the one-pass frames, as did an H.264 file with audio starting
+ *   at 0 once the flag was added. After its first frame a one-pass output is `fps`'s frames one for one (they are
+ *   already constant-rate), so passing them through changes nothing else.
+ * - The `trim` is the output `-t` (the same option, parsed the same way) moved ahead of `select`. ffmpeg applies `-t`
+ *   as a `trim` at the end of the graph, and `trim` measures its duration from the first frame it receives: after
+ *   `select` that is the chunk's first frame, not the shot's, so the chunk's end could fall one frame later.
+ *   Measured 2026-11-16 on ffmpeg 8.1.3, an E2 gate window at 60000/1001 fps, `-t` 16.349667 at 2.0184 Hz: the
+ *   frame stamped 33 (16.349665 s) is cut from the one pass (33 samples once rounded into `fps`'s time base) and
+ *   was written by every later chunk; with the `trim` ahead of `select` each chunk from 1 to 32 ends where the one
+ *   pass does. Stamps are untouched throughout; a `setpts` would NOT keep them, and the `-t` would then cut each
+ *   chunk at a different frame.
+ * The chunks of a shot laid end to end are byte for byte the one-pass output, checked by tests/faces.test.mjs
+ * against the ffmpeg on the PATH: an H.264 B-frame file, the same with an audio track, a stream-copied cut of it
+ * that starts below zero, one whose video starts late, and a `-t` whose last stamp falls 2 microseconds inside it.)
  */
 export function shot_frames_command(video, start, end, width, height, count, out = '-', chunk = null) {
   const duration = Math.max(end - start, 1e-3);
   const scale_width = Math.min(width, DETECT_MAX_WIDTH);
   let scale_height = width ? py_round((height * scale_width) / width) : 0;
   scale_height -= scale_height % 2;
-  const select = chunk ? `select='gte(n,${chunk.first})',` : '';
+  const later = chunk && chunk.first > 0;
+  const select = later ? `trim=duration=${py_repr(duration)},select='gte(pts,${chunk.first})',` : '';
   const argv = [
     'ffmpeg', '-v', 'error',
     '-ss', py_repr(start), '-i', video, '-t', py_repr(duration),
     '-vf', `fps=${py_repr(count / duration)},${select}scale=${scale_width}:${scale_height}`,
-    '-pix_fmt', 'rgb24', '-f', 'rawvideo', ...(chunk ? ['-frames:v', String(chunk.frames)] : []), out,
+    '-pix_fmt', 'rgb24', '-f', 'rawvideo',
+    ...(later ? ['-fps_mode', 'passthrough'] : []),
+    ...(chunk ? ['-frames:v', String(chunk.frames)] : []),
+    out,
   ];
   return { argv, scale_width, scale_height };
 }

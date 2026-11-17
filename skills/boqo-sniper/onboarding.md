@@ -1,10 +1,12 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ 40e164e; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ 620305e; keep in step -->
 # Onboarding
 
 Runs from INSTALL.md step 6, and from a start that finds no brand kit or no `<home>/boqo-sniper/config.json` (SKILL.md →
 Starting, step 2). Three parts, in order: the brand kit, the boqo connection, the posting rule and the sensitivity. Skip
 a part that is done: a kit `node "$HOME/.boqo-sniper/tools/brand.mjs" list` already shows (kits are shared by every boqo
 skill, so another one may have made it), the rule already in `config.json`.
+
+If the person says "defaults" (or "skip", or gives no brand), take the Default kit: save `{"version": 2, "name": "default"}` with `brand.mjs save` (no logo), ask no questions, render no samples, and go on to part 2.
 
 Open with two sentences: in about two minutes you set up their brand kit (a name, a logo, two colours, and a caption
 style they pick by looking at it), then start watching their Twitch or Kick channel. When they already named a channel, say

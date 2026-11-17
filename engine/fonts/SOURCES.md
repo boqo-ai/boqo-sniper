@@ -1,7 +1,7 @@
 # Bundled fonts
 
 The faces boqo's worker image installs (`apps/worker/Dockerfile` at boqo-ai/boqo `bcc9d99cc`), so captions draw here
-as they draw there. `engine/boqo/caption-faces.mjs` (`CAPTION_FACES`) names them by family; the render hands this
+as they draw there, and one it does not, Noto Sans Devanagari (below). `engine/boqo/caption-faces.mjs` (`CAPTION_FACES`) names them by family; the render hands this
 folder to libass as `fontsdir`, and libass finds each face by its family name.
 
 Every file is redistributable with the licence file beside it: SIL Open Font License 1.1 (OFL), Apache License 2.0,
@@ -23,10 +23,28 @@ Dockerfile's `GOOGLE_FONTS_SHA`. One fetch per file, 2026-11-16.
 | `LuckiestGuy-Regular.ttf` | Luckiest Guy | `G/apache/luckiestguy/LuckiestGuy-Regular.ttf` | Apache 2.0, `LICENSE-LuckiestGuy.txt` from `G/apache/luckiestguy/LICENSE.txt` |
 | `PermanentMarker-Regular.ttf` | Permanent Marker | `G/apache/permanentmarker/PermanentMarker-Regular.ttf` | Apache 2.0, `LICENSE-PermanentMarker.txt` from `G/apache/permanentmarker/LICENSE.txt` |
 | `Inter-Bold.otf` | Inter (Bold) | `/usr/share/fonts/opentype/inter/Inter-Bold.otf` of Debian bookworm's `fonts-inter` 4.0~beta7+ds-1, the Dockerfile's apt `fonts-inter`: https://deb.debian.org/debian/pool/main/f/fonts-inter/fonts-inter_4.0~beta7+ds-1_all.deb (sha256 `6afd9014550e04b58bccf64b94f92ae1dbfd8018489b92de835408970234c24c`) | OFL, `OFL-Inter.txt` from https://raw.githubusercontent.com/rsms/inter/v4.0-beta7/LICENSE.txt |
+| `NotoSansDevanagari-Bold.ttf` | Noto Sans Devanagari (Bold) | `https://raw.githubusercontent.com/notofonts/notofonts.github.io/92d2ea744479d3379927f1fb5f8b0945dd0349b7/fonts/NotoSansDevanagari/full/ttf/NotoSansDevanagari-Bold.ttf` (version 2.007; not in boqo's image, see below) | OFL, `OFL-NotoSansDevanagari.txt` from `G/ofl/notosansdevanagari/OFL.txt` |
 | `DejaVuSans-Bold.ttf` | DejaVu Sans (Bold) | `/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf` of Debian bookworm's `fonts-dejavu-core` 2.37-6, the Dockerfile's apt `fonts-dejavu-core`: https://deb.debian.org/debian/pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-6_all.deb (sha256 `8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76`) | Bitstream Vera + public domain, `LICENSE-DejaVu.txt` from https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/version_2_37/LICENSE |
 
 Montserrat and Oswald are the Cyrillic covering faces too (`coveringFace`): none of the seven display faces draws
 Cyrillic, so a Cyrillic clip in one of them is drawn in Montserrat ExtraBold or Oswald.
+
+## Noto Sans Devanagari is the skill's own, not boqo's
+
+boqo's image installs no face that draws Devanagari, so a Hindi caption there is drawn from whatever fontconfig
+finds, or not at all. The skill bundles Noto Sans Devanagari Bold for it (E2-fix3): `engine/script-faces.mjs` switches
+each run of Devanagari in a caption or headline line to this face and back, and the file is burned with complex
+shaping. No caption style names it, so it is not in `CAPTION_FACES` and has no `caption-metrics-table.mjs` entry: the
+layout measures a Devanagari character at the style face's `fallbackAdvance`, as boqo does.
+
+The `full` build, the static Bold instance (no `fvar`): it draws Devanagari (U+0900–097F, Vedic Extensions
+U+1CD0–1CF6 and 1CF8–1CF9, Devanagari Extended U+A8E0–A8FF) and also Basic Latin, Latin-1 and most of Latin
+Extended-A, read with `fc-query` on the file. The google/fonts copy at `G` is a variable font
+(`NotoSansDevanagari[wdth,wght].ttf`), whose named instances libass would not register from `fontsdir` (see
+Montserrat and Oswald below), hence the notofonts build, by
+the commit that last changed the file (2026-09-10). The licence is the OFL text google/fonts ships for the family at
+`G`, the same copyright line as the font's own name table ("Copyright 2022 The Noto Project Authors"); it declares no
+Reserved Font Name. The file is redistributed unmodified.
 
 ## Montserrat and Oswald are static copies of the variable fonts
 
@@ -44,7 +62,7 @@ modified versions under the same licence; neither family declares a Reserved Fon
 
 ## Checked against the image
 
-- Every downloaded font file is byte-identical to the file of the same name in the worker image: sha256 compared
+- Every downloaded font file but Noto Sans Devanagari is byte-identical to the file of the same name in the worker image: sha256 compared
   with the files copied out of `boqo-render:latest` (built 2026-10-06) and `boqo-render:stream-panels` (built
   2026-11-10), which agree with each other.
 - `scripts/fonts/verify-in-image.sh` (in boqo-clips) renders four lines per face at its `CAPTION_FACES` Bold flag inside the image,
@@ -70,6 +88,7 @@ modified versions under the same licence; neither family declares a Reserved Fon
 - `PermanentMarker-Regular.ttf` 28f82c8a7943cb8e9d599f8554da1d4fc75dbcf69b9885ad6c0611d20c6946c5
 - `Inter-Bold.otf` 1e9dfd6a6e33ac63a8fe3b4ed7ae0df9eac2d0b25e444e8e7daef4ac77943fc1
 - `DejaVuSans-Bold.ttf` 0d977336a6d5fba34eab8e3199eb218327161b5143749f802982c2bc34df0c96
+- `NotoSansDevanagari-Bold.ttf` 6caddbb6add29ac171bc243181647fe427f4a7ed35c47cad42e3f79b37305373
 - `OFL-Montserrat.txt` 8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e
 - `OFL-Oswald.txt` 0fd731a904b729a4e02eaf5e8ebd06783edd9abe400e8882760160230675b652
 - `OFL-Anton.txt` ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4
@@ -81,3 +100,4 @@ modified versions under the same licence; neither family declares a Reserved Fon
 - `LICENSE-PermanentMarker.txt` cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 - `OFL-Inter.txt` 4d7d9c95e7d7f2f0ebf76d5e0b344826b74e903a34028ee18ab54bb639e45906
 - `LICENSE-DejaVu.txt` 7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93
+- `OFL-NotoSansDevanagari.txt` a216f6f8d85c7228093e0ee5e258d9d377e6671f68acb4db1930b29583d0f331

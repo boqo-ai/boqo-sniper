@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 // node tools/fetch.mjs info <url> --dir <d>
 //   Reads the video info and ONE caption track, no video download. Writes
-//   <d>/info.json, and with captions <d>/words.json and <d>/transcript.md.
-//   Prints {"id","title","duration","captions":"manual|auto|none","chunks":N}.
-//   With no captions: captions "none", chunks 0, exit 0 (offer local whisper).
+//   <d>/info.json, and with captions <d>/words.json, <d>/segments.json, <d>/transcript.md and
+//   <d>/transcript-language.txt (the chosen track's language). Only a track of the video's own speech is taken,
+//   never a translation (engine/fetch.mjs `captionPlan`).
+//   Prints {"id","title","duration","captions":"manual|auto|partial|none","chunks":N}. "partial": the track has a
+//   stretch of 40 s or more with no word; the files are written as usual and "source" ("manual"|"auto") and
+//   "gaps" ([{"start","end"}], seconds) are added (engine/fetch.mjs `captionGaps`).
+//   With no captions: captions "none", chunks 0, exit 0 (offer local whisper); a "note" says so when the video has
+//   caption tracks and none was its speech.
 // node tools/fetch.mjs comments <url> --dir <d>
 //   Best effort: the top-level viewer comments (at most 200, top order) into
 //   <d>/comments.json for the selection request. Prints {"comments":N}, or

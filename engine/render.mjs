@@ -26,12 +26,13 @@
 // the default runs the real ffmpeg and ffprobe with stdin closed (a reused output path can never wait on ffmpeg's
 // overwrite prompt) and no output-size ceiling (the scene pass prints about 75 bytes a frame).
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, rename, rmdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { FONTS_DIR, DEFAULT_OUTPUT, brandCaptionPreset, captionsTrack, subtitlesFilter } from './captions.mjs';
+import { DEFAULT_OUTPUT, brandCaptionPreset, captionsTrack, textPassFilter } from './captions.mjs';
 import { toolEnv } from './env.mjs';
 import { detectShotFaces } from './faces.mjs';
 import { headlineElement, logoStage } from './headline.mjs';
+import { routeScriptFaces } from './script-faces.mjs';
 import { detectShots } from './shots.mjs';
 import { ENCODE_THREADS, FILTER_THREADS, STEP_TIMEOUT_MS, prepareWindow } from './window.mjs';
 import { cutSecFromShots } from './boqo/caption-cuts.mjs';
@@ -248,19 +249,26 @@ export async function renderClip({
       output: OUTPUT,
       preset: captionStyle,
     });
+    // Each text pass's filter, by its path: complex shaping for a file in a script that needs it (engine/script-faces.mjs).
+    const passFilters = new Map();
     let assPath = null;
     if (captions.ass !== '') {
       assPath = join(work, 'captions.ass');
       await writeFile(assPath, captions.ass);
+      passFilters.set(assPath, textPassFilter(assPath, captions.ass));
     }
     let headlineAssPath = null;
     if (textAbove.length > 0) {
       headlineAssPath = join(work, 'headline.ass');
-      await writeFile(headlineAssPath, buildTextAss(textAbove, durationSec, OUTPUT, 0).ass);
+      // A Devanagari run in the headline is drawn in the bundled Devanagari face, as the captions' are.
+      const headlineAss = routeScriptFaces(buildTextAss(textAbove, durationSec, OUTPUT, 0).ass);
+      await writeFile(headlineAssPath, headlineAss);
+      passFilters.set(headlineAssPath, textPassFilter(headlineAssPath, headlineAss));
     }
 
     let logo = null;
-    if (brand.logo && brand.logo.file) {
+    if (!(brand.logo && brand.logo.file)) notes.push('No logo: the kit has none.');
+    else {
       const kind = await logoKind(brand.logo.file);
       // A file that starts like a PNG and is damaged after: decoded once here, because looped as input #1 of the
       // encode (`-loop 1`) it kept the encode from ending (measured 2026-11-16, BtbN ffmpeg 8.1, a PNG signature then
@@ -298,7 +306,7 @@ export async function renderClip({
             headlineAssPath,
             blurSigma: FALLBACK_BLUR_SIGMA,
             brandLogo: withLogo ? logo.stage : null,
-            subtitles: (p) => subtitlesFilter(p, FONTS_DIR),
+            subtitles: (p) => passFilters.get(p),
           }),
           outPath: clipPath,
           filterThreads: FILTER_THREADS,
@@ -340,6 +348,8 @@ export async function renderClip({
     // The clip is in place: a work folder that will not go away (Windows keeps a just-closed file busy, EBUSY) is
     // left behind, and the clip still counts.
     await rm(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(() => {});
+    // rmdir only removes an empty folder: another clip's (a failed one's) work folder keeps `render/`.
+    await rmdir(join(run, WORK_DIR)).catch(() => {});
     const round = (x) => Math.round(x * 1000) / 1000;
     return {
       file,

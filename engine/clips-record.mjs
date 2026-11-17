@@ -61,7 +61,7 @@ const candidateOf = (clip) => ({
  *   video?: { id?: string | null, title?: string | null, language?: string | null },
  * }} o `heat` is the discounted most-replayed curve (engine/boqo/replay.mjs `discountHeatmap`), or null;
  *   `length` is a clip-length preset key (auto when absent).
- * @returns {{ ok: false, errors: string[] } | { ok: true, record: object, dropped: Record<string, number> }}
+ * @returns {{ ok: false, errors: string[] } | { ok: true, record: object, dropped: Record<string, number>, droppedClips: { clip: number, start: number, end: number, reason: string }[] }}
  */
 export function checkSelection(raw, { segments, durationSec, heat, length = 'auto', video = {} }) {
   if (!Array.isArray(segments) || segments.length === 0) return { ok: false, errors: ['there are no transcript segments to snap to'] };
@@ -86,7 +86,8 @@ export function checkSelection(raw, { segments, durationSec, heat, length = 'aut
   const target = clipTargetFor(durationSec);
   const cap = keepCeilingFor(target);
   const band = resolveClipLength(length);
-  const { kept, dropped } = snapAndFilter(parsed.data.clips.map(candidateOf), segments, {
+  const candidates = parsed.data.clips.map(candidateOf);
+  const { kept, dropped } = snapAndFilter(candidates, segments, {
     minScore: 0,
     maxClips: cap,
     hardMinSec: band.hardMinSec,
@@ -121,6 +122,9 @@ export function checkSelection(raw, { segments, durationSec, heat, length = 'aut
 
   const reasons = {};
   for (const d of dropped) reasons[d.reason] = (reasons[d.reason] ?? 0) + 1;
+  // snapAndFilter hands back the candidate objects it was given, so the place in selection.json is found by identity;
+  // `start` and `end` are the clip's own, as the agent wrote them (not the snapped edges). Read out of snap.mjs.
+  const droppedClips = dropped.map((d) => ({ clip: candidates.indexOf(d.candidate) + 1, start: d.candidate.startSec, end: d.candidate.endSec, reason: d.reason }));
   return {
     ok: true,
     record: {
@@ -131,5 +135,6 @@ export function checkSelection(raw, { segments, durationSec, heat, length = 'aut
       clips,
     },
     dropped: reasons,
+    droppedClips,
   };
 }

@@ -2,12 +2,14 @@
 // node tools/asr.mjs <file> [--from s --to e] [--lang xx] --out <words.json>
 //   Local speech to words with whisper.cpp. With --from/--to only that range
 //   is transcribed; times stay on the source timeline. Also writes
-//   `segments.json` (sentence segments, source whisper) next to <words.json>.
+//   `segments.json` (sentence segments, source whisper) next to <words.json>, and `transcript-language.txt` with the
+//   language it ran in (removed when that is unknown), and removes a `transcript.md` there: both came from a
+//   caption track that these words replace.
 //   Prints {"words":N,"out":"<path>","model":"<file name>","seconds":<wall time>,
 //   "lang":"<language it ran in>","englishOnly":bool}. englishOnly is true for an
 //   `.en` model, which hears every video as English.
 // Exit 1 with {"error":"..."} on failure (whisper-cli or a model missing too).
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { transcribeDetailed } from '../engine/asr.mjs';
 import { segmentsFromWords } from '../engine/segments.mjs';
@@ -46,6 +48,12 @@ async function main(argv) {
   const out = resolve(opt.out);
   writeFileSync(out, JSON.stringify(r.words));
   writeFileSync(join(dirname(out), 'segments.json'), JSON.stringify(segmentsFromWords(r.words, { source: 'whisper' })));
+  // The words just written are whisper's, so a language file and a transcript.md left by `fetch info` (the caption track's,
+  // which may be another language or a partial one) no longer describe them: `select-request` reads this file.
+  const lang = typeof r.lang === 'string' && r.lang !== '' && r.lang !== 'auto' ? r.lang : null;
+  if (lang) writeFileSync(join(dirname(out), 'transcript-language.txt'), `${lang}\n`);
+  else rmSync(join(dirname(out), 'transcript-language.txt'), { force: true });
+  rmSync(join(dirname(out), 'transcript.md'), { force: true });
   process.stdout.write(
     JSON.stringify({
       words: r.words.length,

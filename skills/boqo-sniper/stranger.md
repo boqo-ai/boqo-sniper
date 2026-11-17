@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/stranger.md @ 40e164e; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/stranger.md @ 620305e; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/stranger/prompt.ts @ bcc9d99cc; keep in step -->
 <!-- ported from boqo-ai/boqo packages/core/src/stranger.ts @ bcc9d99cc; keep in step -->
 # Judging a clip as a stranger

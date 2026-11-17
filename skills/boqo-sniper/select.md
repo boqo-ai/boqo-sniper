@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/select.md @ 40e164e; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/select.md @ 620305e; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/select/prompt.ts @ bcc9d99cc; keep in step -->
 <!-- ported from boqo-ai/boqo apps/worker/src/select/anthropic.ts @ bcc9d99cc; keep in step -->
 # Selecting the clips
@@ -68,6 +68,10 @@ Emphasis words: the words within the clip that a viewer should catch, which the 
 
 Return clips ordered by score, highest first, and do not return two clips covering the same moment.
 <!-- rubric ends -->
+
+The check keeps at most the cap in `clips.json` (the target × 1.25, never more than 120) and drops the lowest scores beyond it as `over_cap`: a clip returned past the cap is left out, so the target stays a floor to reach and the cap is where the check stops.
+
+End a clip at least 0.3 s before the next line's printed start: the request rounds each start to 0.1 s, and an end that lands on the printed start can fall inside that line, where the check snaps it to that line's end and the clip takes in the whole extra sentence.
 
 ## Where the words show
 

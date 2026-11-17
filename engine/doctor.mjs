@@ -227,6 +227,7 @@ export const BUNDLED_FONTS = [
   'Inter-Bold.otf',
   'LuckiestGuy-Regular.ttf',
   'Montserrat-ExtraBold.ttf',
+  'NotoSansDevanagari-Bold.ttf',
   'Oswald-Bold.ttf',
   'PermanentMarker-Regular.ttf',
   'Poppins-Black.ttf',
