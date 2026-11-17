@@ -1,25 +1,30 @@
-// Doctor: looks at what this machine has (Node, ffmpeg with libass/ebur128 and
-// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, onnxruntime-node running the face model, the bundled
-// caption fonts, optionally streamlink) and
+// Doctor: looks at what this machine has (Node, ffmpeg 5.1 or newer with libass/ebur128 and
+// working HTTPS, its ffprobe, yt-dlp, whisper.cpp and a model, the skill's npm packages (zod, and onnxruntime-node
+// running the face model), the bundled caption fonts, optionally streamlink) and
 // says exactly how to install what is missing, per OS. It only looks; it never
-// installs anything.
+// installs anything. Nothing it imports needs an npm package, so it runs, and says so, when they are not installed.
 import { spawn } from 'node:child_process';
-import { accessSync, constants, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MODEL_URL, findModel } from './asr.mjs';
 import { FaceModelError, loadBlazeFace } from './blazeface.mjs';
-import { boqoHome } from './brand.mjs';
-import { toolEnv } from './env.mjs';
+import { boqoHome, toolEnv } from './env.mjs';
+import { SKILL, missingPackage, npmCi } from './packages.mjs';
 
 /**
- * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'onnxruntime'|'fonts'|'streamlink',
- *             ok: boolean, detail: string, required: boolean, cause?: 'not-installed'|'model'|'runtime' }} Check
- * (`cause` only on a failed onnxruntime check.)
+ * @typedef {{ name: 'node'|'ffmpeg'|'ffprobe'|'ffmpeg-filters'|'ffmpeg-https'|'yt-dlp'|'whisper'|'whisper-model'|'zod'|'onnxruntime'|'fonts'|'streamlink',
+ *             ok: boolean, detail: string, required: boolean, cause?: 'not-installed'|'model'|'runtime'|'old' }} Check
+ * (`cause` only on a failed zod or onnxruntime check, and `old` on an ffmpeg that runs and is older than MIN_FFMPEG.)
  */
 
 export const MIN_YTDLP = '2026.10.26';
+// The render's scene pass and the face sampler pass `-fps_mode passthrough` (engine/boqo/scenes.mjs,
+// engine/boqo/detect-faces.mjs), an option of ffmpeg 5.1 on. Measured 2026-11-17 in docker with each image's apt
+// ffmpeg: ubuntu:22.04's `4.4.2-0ubuntu0.22.04.1` exits 1 on `-fps_mode passthrough` (`Unrecognized option
+// 'fps_mode'`), so every clip would fail, though it has libass and ebur128 and passes every other check;
+// debian:bookworm's `5.1.9-0+deb12u1` and ubuntu:24.04's `6.1.1-3ubuntu5` run it and pass this check.
+export const MIN_FFMPEG = '5.1';
 export const PROBE_URL = 'https://raw.githubusercontent.com/boqo-ai/boqo-clips/main/engine/fixtures/probe.mp4';
 
 const QUICK_MS = 15_000;
@@ -98,6 +103,19 @@ export function ytDlpAtLeast(v, min = MIN_YTDLP) {
   return true;
 }
 
+/**
+ * Whether ffmpeg's version (the banner's `ffmpeg version <v>`, a leading `n` already dropped) is MIN_FFMPEG or newer:
+ * true or false for a release (`4.4.2-0ubuntu0.22.04.1`, `7.1-full_build-www.gyan.dev`, `8.0`), null for anything else
+ * (a git build such as `N-117000-g…` or `2025-01-02-git-…`), which the caller asks about the option itself.
+ */
+export function ffmpegAtLeast(v, min = MIN_FFMPEG) {
+  const m = /^(\d+)\.(\d+)/.exec(String(v).trim());
+  if (!m) return null;
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  const [minMajor, minMinor] = min.split('.').map(Number);
+  return major !== minMajor ? major > minMajor : minor >= minMinor;
+}
+
 const CRASH_CODES = new Set([139, -11, 134, 132, 138, 3221225477, 3221226356]);
 const CRASH_SIGNALS = new Set(['SIGSEGV', 'SIGABRT', 'SIGILL', 'SIGBUS']);
 
@@ -109,16 +127,26 @@ function checkNode(nodeMin) {
   return { name: 'node', ok, detail: ok ? `node ${v}` : `node ${v}, need ${nodeMin}+`, required: true };
 }
 
+/** The ffmpeg check, and whether that ffmpeg runs at all (an old one does: its filters and HTTPS are still looked at). */
 async function checkFfmpeg(env) {
   const path = locate(env, 'ffmpeg');
-  if (!path) return { name: 'ffmpeg', ok: false, detail: 'not found on PATH', required: true };
+  if (!path) return { check: { name: 'ffmpeg', ok: false, detail: 'not found on PATH', required: true }, runs: false };
   const r = await run(env, 'ffmpeg', ['-hide_banner', '-version']);
   const m = /ffmpeg version (?:n(?=\d))?(\S+)/i.exec(r.stdout);
   if (r.code !== 0 || !m) {
-    return { name: 'ffmpeg', ok: false, detail: `ffmpeg at ${path} did not run (${r.signal ?? `exit ${r.code}`})`, required: true };
+    return { check: { name: 'ffmpeg', ok: false, detail: `ffmpeg at ${path} did not run (${r.signal ?? `exit ${r.code}`})`, required: true }, runs: false };
   }
   const ver = m[1].replace(/-static$/, '');
-  return { name: 'ffmpeg', ok: true, detail: `ffmpeg ${ver} at ${path}`, required: true };
+  let recent = ffmpegAtLeast(ver);
+  if (recent === null) {
+    // A git build names no release: its option list says whether it has -fps_mode.
+    const h = await run(env, 'ffmpeg', ['-hide_banner', '-h', 'long']);
+    recent = h.code === 0 && /^-fps_mode\b/m.test(h.stdout);
+  }
+  if (!recent) {
+    return { check: { name: 'ffmpeg', ok: false, detail: `ffmpeg ${ver} at ${path} is older than ${MIN_FFMPEG}`, required: true, cause: 'old' }, runs: true };
+  }
+  return { check: { name: 'ffmpeg', ok: true, detail: `ffmpeg ${ver} at ${path}`, required: true }, runs: true };
 }
 
 async function checkFfprobe(env) {
@@ -185,15 +213,22 @@ function checkModel(required) {
     : { name: 'whisper-model', ok: false, detail: 'no ggml model found', required };
 }
 
-// The skill's own name (package.json), so a hint names the folder it was cloned into: ~/.boqo-clips,
-// ~/.boqo-channel or ~/.boqo-sniper (this file is shared by all three).
-const SKILL = (() => {
+/**
+ * zod, the package every tool but this one loads (hosted's schemas, engine/boqo/), loads from the skill's folder.
+ * `load` is injectable for tests. A failed check carries `cause`: 'not-installed' (engine/packages.mjs
+ * `missingPackage`), else 'runtime'.
+ */
+async function checkZod(load = () => import('zod')) {
+  const name = 'zod';
   try {
-    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name || 'boqo-clips';
-  } catch {
-    return 'boqo-clips';
+    const mod = await load();
+    if (typeof mod?.z?.object !== 'function') throw new Error('it has no z.object');
+    return { name, ok: true, detail: 'zod loads', required: true };
+  } catch (e) {
+    if (missingPackage(e) !== null) return { name, ok: false, detail: 'zod is not installed', required: true, cause: 'not-installed' };
+    return { name, ok: false, detail: `zod did not load: ${String(e?.message ?? e).split('\n')[0]}`, required: true, cause: 'runtime' };
   }
-})();
+}
 
 /**
  * onnxruntime-node loads, the face model's checksum matches, and one blank image runs through it (engine/blazeface.mjs
@@ -258,23 +293,24 @@ async function checkStreamlink(env) {
 /**
  * Look at the machine. Never installs anything. The tools are looked for and
  * run with `o.env` (default `toolEnv()`, which finds macOS ffmpeg-full).
- * `o.loadOnnx` replaces onnxruntime-node's loader and `o.fontsDir` the bundled fonts' folder (tests).
- * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv, loadOnnx?: () => Promise<any>, fontsDir?: string }} o
+ * `o.loadOnnx` and `o.loadZod` replace the packages' loaders and `o.fontsDir` the bundled fonts' folder (tests).
+ * @param {{ nodeMin: 20|22, whisper: 'required'|'optional', streamlink?: boolean, env?: NodeJS.ProcessEnv, loadOnnx?: () => Promise<any>, loadZod?: () => Promise<any>, fontsDir?: string }} o
  * @returns {Promise<Check[]>}
  */
 export async function runChecks(o) {
   const env = o.env ?? toolEnv();
   const wr = o.whisper === 'required';
-  const [ffmpeg, ffprobe] = await Promise.all([checkFfmpeg(env), checkFfprobe(env)]);
-  const [filters, https, ytdlp, whisper, onnx, streamlink] = await Promise.all([
-    checkFilters(env, ffmpeg.ok),
-    checkHttps(env, ffmpeg.ok),
+  const [{ check: ffmpeg, runs }, ffprobe] = await Promise.all([checkFfmpeg(env), checkFfprobe(env)]);
+  const [filters, https, ytdlp, whisper, zod, onnx, streamlink] = await Promise.all([
+    checkFilters(env, runs),
+    checkHttps(env, runs),
     checkYtDlp(env),
     checkWhisper(env, wr),
+    checkZod(o.loadZod),
     checkOnnx(o.loadOnnx),
     o.streamlink ? checkStreamlink(env) : null,
   ]);
-  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), onnx, checkFonts(o.fontsDir), ...(streamlink ? [streamlink] : [])];
+  return [checkNode(o.nodeMin), ffmpeg, ffprobe, filters, https, ytdlp, whisper, checkModel(wr), zod, onnx, checkFonts(o.fontsDir), ...(streamlink ? [streamlink] : [])];
 }
 
 /** True when every required check passed. */
@@ -295,7 +331,15 @@ function modelDir() {
 const FFMPEG = {
   darwin: '`brew install ffmpeg-full` (the engine finds it by itself; plain `brew install ffmpeg` has no libass)',
   win32: '`winget install Gyan.FFmpeg`',
-  linux: `install a full ffmpeg: your distro package (\`sudo apt install ffmpeg\`, \`sudo dnf install ffmpeg\`) or the BtbN build ${BTBN}`,
+  linux: `install a full ffmpeg, ${MIN_FFMPEG} or newer: your distro package (\`sudo apt install ffmpeg\`, \`sudo dnf install ffmpeg\`) or the BtbN build ${BTBN}`,
+};
+
+// An ffmpeg that runs and is too old. Ubuntu 22.04's apt ffmpeg is 4.4.2 (above), so the Linux hint there is a static
+// build, copied where the person's shell finds it first.
+const FFMPEG_OLD = {
+  darwin: '`brew upgrade ffmpeg-full`, or `brew install ffmpeg-full` when it is not installed (the engine finds it by itself)',
+  win32: '`winget upgrade Gyan.FFmpeg`',
+  linux: `Ubuntu 24.04 and Debian 12 have one (\`sudo apt install ffmpeg\`); on Ubuntu 22.04, or another distro whose ffmpeg is older, the static BtbN build ${BTBN} (a \`linux64-gpl\` archive): copy its \`bin/ffmpeg\` and \`bin/ffprobe\` into \`~/.local/bin\`, then open a new shell`,
 };
 
 /**
@@ -323,7 +367,7 @@ export function hintsFor(failed, platform) {
         break;
       }
       case 'ffmpeg':
-        lines.push(`ffmpeg: ${FFMPEG[p]}`);
+        lines.push(c.cause === 'old' ? `ffmpeg: ${c.detail}, which the renders need (\`-fps_mode\`): ${FFMPEG_OLD[p]}` : `ffmpeg: ${FFMPEG[p]}`);
         installs = true;
         break;
       case 'ffprobe':
@@ -369,9 +413,16 @@ export function hintsFor(failed, platform) {
       case 'whisper-model':
         lines.push(`whisper-model: download ${MODEL_URL} into ${modelDir()}`);
         break;
+      case 'zod': {
+        // One npm command installs both packages: with onnxruntime-node missing too, its line says it.
+        if (c.cause === 'not-installed' && bad.some((x) => x.name === 'onnxruntime' && x.cause === 'not-installed')) break;
+        const npm = `\`${npmCi(p)}\``;
+        if (c.cause === 'not-installed') lines.push(`zod: the skill's packages are not installed: ${npm}`);
+        else lines.push(`zod: ${c.detail}; reinstall the skill's packages: ${npm}`);
+        break;
+      }
       case 'onnxruntime': {
-        // Windows PowerShell 5.1 has no `&&`; `;` separates two commands in PowerShell and in Git Bash alike.
-        const npm = `\`cd "$HOME/.${SKILL}"${p === 'win32' ? ';' : ' &&'} npm ci --omit=dev --ignore-scripts\``;
+        const npm = `\`${npmCi(p)}\``;
         if (c.cause === 'not-installed') lines.push(`onnxruntime: the skill's packages are not installed: ${npm}`);
         else if (c.cause === 'model') {
           lines.push(`onnxruntime: ${c.detail}; reinstall the skill (https://github.com/boqo-ai/${SKILL}), its copy of the model is damaged`);

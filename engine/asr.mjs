@@ -6,8 +6,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { availableParallelism, homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { boqoHome } from './brand.mjs';
-import { toolEnv } from './env.mjs';
+import { boqoHome, toolEnv } from './env.mjs';
 import { wordsFromWhisper } from './words.mjs';
 
 /** @typedef {import('./words.mjs').Word} Word */

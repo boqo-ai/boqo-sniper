@@ -9,13 +9,9 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  defaultBrandName,
-  listBrands,
-  loadBrand,
-  saveBrand,
-  setDefaultBrand,
-} from '../engine/brand.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const { defaultBrandName, listBrands, loadBrand, saveBrand, setDefaultBrand } = await needPackages(() => import('../engine/brand.mjs'));
 
 const MAX_LOGO_BYTES = 10 * 1024 * 1024;
 

@@ -25,8 +25,10 @@
 // Exit 1 with {"error":"..."} on failure.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { selectRows } from '../engine/order.mjs';
 import { fetchComments, fetchInfo, fetchSections, realRun, infoArgs } from '../engine/fetch.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const { selectRows } = await needPackages(() => import('../engine/order.mjs'));
 
 const fail = (msg) => {
   process.stdout.write(JSON.stringify({ error: msg }) + '\n');

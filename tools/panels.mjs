@@ -17,7 +17,9 @@
 //   --src          the whole video, for a run with no sections.json (a local file); words default to <run>/words.json.
 //   Errors: {"ok":false,"errors":[…]} and exit 1.
 import { resolve } from 'node:path';
-import { PanelsError, probeFrames, readFrames, recordProbe, recordRead } from '../engine/panels-read.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const { PanelsError, probeFrames, readFrames, recordProbe, recordRead } = await needPackages(() => import('../engine/panels-read.mjs'));
 
 const say = (obj, code = 0) => {
   process.stdout.write(`${JSON.stringify(obj)}\n`);

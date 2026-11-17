@@ -2,8 +2,14 @@
 // On macOS, Homebrew's ffmpeg-full (the build with libass) is keg-only: it is
 // not linked onto PATH, and every agent command runs in a new shell, so an
 // `export PATH=...` hint is gone by the next command. The tools find it here.
+// Also the boqo home folder. This file imports only Node's own modules, so the doctor, which reads both, runs before
+// the skill's npm packages are installed.
 import { existsSync } from 'node:fs';
-import { posix } from 'node:path';
+import { homedir } from 'node:os';
+import { join, posix } from 'node:path';
+
+/** `$BOQO_HOME`, or `~/.boqo` when it is unset: brand kits, models and every skill's own files live under it. */
+export const boqoHome = () => process.env.BOQO_HOME || join(homedir(), '.boqo');
 
 /** ffmpeg-full's bin folder, Apple silicon first, then Intel. */
 export const MAC_FFMPEG_DIRS = ['/opt/homebrew/opt/ffmpeg-full/bin', '/usr/local/opt/ffmpeg-full/bin'];

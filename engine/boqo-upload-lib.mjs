@@ -1,6 +1,7 @@
 // (copied from boqo-ai/boqount, MIT; changes: `probe` reads any container, and names one boqo does not take
 // as a reason instead of failing, so the skill can read a local file's length through it; `probe-audio` and a
-// `put` that takes a transcribe upload's reply (`upload_id`, no `projectId`) serve boqo's `transcribe` tool)
+// `put` that takes a transcribe upload's reply (`upload_id`, no `projectId`) serve boqo's `transcribe` tool;
+// `name` and `caption` read a clip's title and hook from <run>/clips.json with `--run <run> --n <k>`)
 // The mechanical half of publishing through boqo's MCP: probe a video, build the caption-safe upload file
 // name, and PUT the parts a `create_upload` reply asks for. The CLI is tools/boqo-upload.mjs; the tests are
 // tests/boqo-upload.test.mjs.
@@ -10,7 +11,7 @@
 // 64 (2 GiB); the URLs live 48 hours; an uploaded Post's caption is its file name minus `.mp4`, cut to 200
 // characters, with `-` and `_` read as spaces.
 import { open } from "node:fs/promises";
-import { extname } from "node:path";
+import { extname, join } from "node:path";
 import { captionFor, tagsOf } from "./boqo/post-caption.mjs";
 
 export const PART_BYTES = 33554432;
@@ -173,6 +174,31 @@ function flag(args, name) {
   return { value: args[i + 1], rest: [...args.slice(0, i), ...args.slice(i + 2)] };
 }
 
+// A clip's title and hook, from its row of <run>/clips.json (by `n`). The skill's docs pass a clip this way, never its
+// words: on a shell line inside double quotes, `$100k` loses `$1`, a `"` ends the argument and a backtick runs a command.
+async function clipRow(runDir, nArg, readFile) {
+  if (!/^[1-9][0-9]*$/.test(String(nArg ?? ""))) throw new Error("--n must be a clip number, 1 or more");
+  let text;
+  try {
+    text = await readFile(join(runDir, "clips.json"), "utf8");
+  } catch (e) {
+    throw new Error(`cannot read clips.json: ${e?.code ?? e?.message}`);
+  }
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    throw new Error("clips.json is not valid JSON");
+  }
+  const n = Number(nArg);
+  const row = Array.isArray(record?.clips) ? record.clips.find((c) => c?.n === n) : undefined;
+  if (!row) throw new Error(`clips.json has no clip ${n}`);
+  if (typeof row.title !== "string" || row.title.trim() === "") throw new Error(`clip ${n} has no title`);
+  return { title: row.title, hook: typeof row.hook === "string" ? row.hook : null };
+}
+
+const CAPTION_USAGE = "usage: caption --run <run> --n <k> [--tags a,b] | caption --title <title> [--hook <hook>] [--tags a,b]";
+
 // A signed URL must never reach the output, whatever put it in a message.
 const scrub = (s) => String(s).replace(/https?:\/\/\S*/gi, "<url>").replace(/X-Amz\S*/gi, "<redacted>");
 const fail = (message) => ({ code: 1, line: JSON.stringify({ error: scrub(message) }) });
@@ -182,6 +208,13 @@ export async function run(argv, deps) {
   const [command, ...args] = argv;
   try {
     if (command === "name") {
+      const r = flag(args, "--run");
+      if (r.value !== undefined) {
+        const k = flag(r.rest, "--n");
+        if (k.rest.length > 0) return fail("usage: name --run <run> --n <k> | name <text…>");
+        const row = await clipRow(r.value, k.value, deps.readFile);
+        return { code: 0, line: JSON.stringify({ filename: captionFilename(row.title) }) };
+      }
       return { code: 0, line: JSON.stringify({ filename: captionFilename(args.join(" ")) }) };
     }
     if (command === "caption") {
@@ -189,8 +222,17 @@ export async function run(argv, deps) {
       const t = flag(args, "--title");
       const h = flag(t.rest, "--hook");
       const g = flag(h.rest, "--tags");
-      if (g.rest.length > 0 || typeof t.value !== "string") return fail("usage: caption --title <title> [--hook <hook>] [--tags a,b]");
-      const clip = { title: t.value, hook: h.value ?? null };
+      const r = flag(g.rest, "--run");
+      const k = flag(r.rest, "--n");
+      if (k.rest.length > 0) return fail(CAPTION_USAGE);
+      let clip;
+      if (r.value !== undefined) {
+        if (t.value !== undefined || h.value !== undefined) return fail(CAPTION_USAGE);
+        clip = await clipRow(r.value, k.value, deps.readFile);
+      } else {
+        if (k.value !== undefined || typeof t.value !== "string") return fail(CAPTION_USAGE);
+        clip = { title: t.value, hook: h.value ?? null };
+      }
       const tags = tagsOf(g.value);
       return {
         code: 0,
@@ -251,7 +293,7 @@ export async function run(argv, deps) {
       if (out.ok) return { code: 0, line: JSON.stringify({ ok: true, ...id, parts: parts.length, bytes: out.bytes }) };
       return { code: 1, line: JSON.stringify({ ok: false, ...id, partNumber: out.partNumber, status: out.status }) };
     }
-    return fail("usage: probe <file> | probe-audio <file> | name <text…> | caption --title <title> [--hook <hook>] [--tags a,b] | put <file> --reply <reply.json>");
+    return fail("usage: probe <file> | probe-audio <file> | name --run <run> --n <k> | name <text…> | caption --run <run> --n <k> [--tags a,b] | caption --title <title> [--hook <hook>] [--tags a,b] | put <file> --reply <reply.json>");
   } catch (e) {
     return fail(e?.message ?? e);
   }

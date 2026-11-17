@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// node tools/select-request.mjs --run <run dir> [--genre g] [--length l] [--prompt "<words>"] [--lang xx]
+// node tools/select-request.mjs --run <run dir> [--genre g] [--length l] [--prompt-file <file> | --prompt "<words>"] [--lang xx]
 //   Writes <run>/select-request.md: hosted's selection rubric, a line holding
 //   only ---, then hosted's user message for this video. The agent reads it
 //   and writes <run>/selection.json (tools/select-check.mjs checks it). Reads
@@ -7,7 +7,9 @@
 //   (optional: a local file has neither).
 //   --genre   auto (default), podcast, talk, gaming, vlog or entertainment
 //   --length  auto (default), under_30, 30_60, 60_90, 90_120 or 120_180
-//   --prompt  the person's own words about what they want, quoted into the request
+//   --prompt-file  a UTF-8 file holding the person's own words about what they want, quoted into the request (the
+//             skill's docs use this one: on a shell line, `$`, `"` and a backtick in the words are the shell's)
+//   --prompt  the same words as an argument (a caller that spawns this tool with no shell)
 //   --lang    the transcript's language code when info.json does not say
 //             (<run>/transcript-language.txt, written by tools/transcript-boqo.mjs, stands in for it and
 //             goes before info.json's: Deepgram heard the audio)
@@ -16,8 +18,11 @@
 //   Prints {"target":n,"segments":n,"chars":n}. Exit 1 with {"error":"..."} on failure.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { SELECTION_RUBRIC, buildUserMessage } from '../engine/boqo/prompt.mjs';
-import { buildSelectionInput } from '../engine/select-input.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const [{ SELECTION_RUBRIC, buildUserMessage }, { buildSelectionInput }] = await needPackages(() =>
+  Promise.all([import('../engine/boqo/prompt.mjs'), import('../engine/select-input.mjs')]),
+);
 
 const fail = (msg) => {
   process.stdout.write(JSON.stringify({ error: msg }) + '\n');
@@ -49,7 +54,7 @@ function readLanguage(run) {
   }
 }
 
-const FLAGS = { '--run': 'run', '--genre': 'genre', '--length': 'length', '--prompt': 'prompt', '--lang': 'lang' };
+const FLAGS = { '--run': 'run', '--genre': 'genre', '--length': 'length', '--prompt': 'prompt', '--prompt-file': 'promptFile', '--lang': 'lang' };
 
 function main(argv) {
   const opt = {};
@@ -59,8 +64,17 @@ function main(argv) {
     if (i + 1 >= argv.length) fail(`${argv[i]} needs a value`);
     opt[key] = argv[++i];
   }
-  if (opt.run === undefined) fail('usage: select-request.mjs --run <run dir> [--genre g] [--length l] [--prompt "<words>"] [--lang xx]');
+  if (opt.run === undefined) fail('usage: select-request.mjs --run <run dir> [--genre g] [--length l] [--prompt-file <file> | --prompt "<words>"] [--lang xx]');
   const run = resolve(opt.run);
+  if (opt.promptFile !== undefined) {
+    if (opt.prompt !== undefined) fail('give --prompt or --prompt-file, not both');
+    try {
+      // A file saved by Windows Notepad can start with a byte-order mark, which no prompt means.
+      opt.prompt = readFileSync(resolve(opt.promptFile), 'utf8').replace(/^\uFEFF/, '');
+    } catch (err) {
+      fail(`cannot read the prompt file ${opt.promptFile}: ${err.code ?? err.message}`);
+    }
+  }
 
   const segments = readJson(join(run, 'segments.json'), 'segments file', true);
   if (!Array.isArray(segments) || segments.length === 0) fail('segments.json must hold a non-empty array');

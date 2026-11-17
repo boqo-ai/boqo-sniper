@@ -52,6 +52,9 @@ export const OUTPUT = DEFAULT_OUTPUT;
 export const OUT_DIR = 'out';
 export const WORK_DIR = 'render';
 
+/** A kit with no logo: the run's note, which tools/render.mjs gives once for the batch (a clip's notes do not carry it). */
+export const NO_LOGO_NOTE = 'No logo: the kit has none.';
+
 /** How long decoding the logo's one frame may take before the clip renders without it. */
 const LOGO_CHECK_TIMEOUT_MS = 30_000;
 
@@ -267,8 +270,8 @@ export async function renderClip({
     }
 
     let logo = null;
-    if (!(brand.logo && brand.logo.file)) notes.push('No logo: the kit has none.');
-    else {
+    // A kit with no logo is a fact about the run, not the clip: tools/render.mjs says NO_LOGO_NOTE once.
+    if (brand.logo && brand.logo.file) {
       const kind = await logoKind(brand.logo.file);
       // A file that starts like a PNG and is damaged after: decoded once here, because looped as input #1 of the
       // encode (`-loop 1`) it kept the encode from ending (measured 2026-11-16, BtbN ffmpeg 8.1, a PNG signature then

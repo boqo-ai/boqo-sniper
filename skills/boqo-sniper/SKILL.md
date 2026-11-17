@@ -73,10 +73,14 @@ two chats, as many as the PC carries.
   `lowDisk` means the disk is under 5 GB free now and nothing will be cut: say so once; a full queue of 10 needs 7 to
   8 GB free at the start.
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
+- **Words never go on a command line.** A title, a hook or the person's own words inside double quotes are the
+  shell's to rewrite (`$100k` loses `$1`, a `"` ends them, a backtick runs a command). The commands here read them
+  from `clips.json` or `config.json`, which you write with your file tool, never with `echo`.
 - Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp or
   whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required` and give the person its
-  `hints`. `Cannot find package 'zod'` (or `'onnxruntime-node'`): the npm packages are missing, as after an update that
-  only pulled; `"$HOME/.boqo-sniper/INSTALL.md"` → Updating installs them, after the person's yes.
+  `hints`. An error saying the skill's packages are not installed, or `Cannot find package 'zod'` (or
+  `'onnxruntime-node'`): the npm packages are missing, as after an update that only pulled;
+  `"$HOME/.boqo-sniper/INSTALL.md"` → Updating installs them, after the person's yes.
 - **The capture is yt-dlp,** ads and all. streamlink skips Twitch's ads but is untested in this beta: only when the
   person asks for it, add `"capture": "streamlink"` to `config.json` (the watcher reads it at start; streamlink must be
   installed). Never suggest it unasked.

@@ -11,13 +11,17 @@
 //   --lang    the transcript's language code when info.json does not say
 //   Prints {"ok":true,"kept":n,"dropped":{reason:count},"dropped_clips":[{clip,start,end,reason}]} and exits 0
 //   (clip is the place in selection.json's clips, 1 for the first; dropped_clips is absent when none was dropped), or
-//   {"ok":false,"errors":[...]} and exits 1 (a stale clips.json is removed). The
+//   {"ok":false,"errors":[...]} and exits 1 (a stale clips.json is removed; while an interrupted `clips order` is
+//   pending, nothing is touched). The
 //   agent fixes selection.json and runs it again. Paths in errors are
 //   selection.json's: clips[0] is the first clip.
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { checkSelection } from '../engine/clips-record.mjs';
-import { durationOf, languageFor, replayCurveOf } from '../engine/select-input.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const [{ checkSelection }, { durationOf, languageFor, replayCurveOf }, { JOURNAL }] = await needPackages(() =>
+  Promise.all([import('../engine/clips-record.mjs'), import('../engine/select-input.mjs'), import('../engine/order.mjs')]),
+);
 
 const say = (obj, code) => {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -54,6 +58,8 @@ function main(argv) {
   if (opt.run === undefined) stop(['usage: select-check.mjs --run <run dir> [--length l] [--lang xx]']);
   const run = resolve(opt.run);
   const clipsFile = join(run, 'clips.json');
+  // The next `clips order` would write the journal's record over this check's, as render and stranger refuse for.
+  if (existsSync(join(run, JOURNAL))) stop(['an interrupted order is pending: run clips.mjs order first, then check again']);
   // Never leave a record that does not belong to the selection.json now on disk.
   rmSync(clipsFile, { force: true });
 

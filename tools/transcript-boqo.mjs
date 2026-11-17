@@ -12,7 +12,9 @@
 //   Prints {"words":n,"segments":n,"language":"xx","durationSec":n}. Exit 1 with {"error":"..."} on failure.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fetchTranscriptJson, parseBoqoTranscript } from '../engine/transcript-boqo.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const { fetchTranscriptJson, parseBoqoTranscript } = await needPackages(() => import('../engine/transcript-boqo.mjs'));
 
 const fail = (msg) => {
   process.stdout.write(JSON.stringify({ error: String(msg).replace(/\s+/g, ' ').replace(/https?:\/\/\S*/gi, '<link>').slice(0, 300) }) + '\n');

@@ -16,11 +16,17 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { JOURNAL, writeAtomic } from '../engine/order.mjs';
 import { toolEnv } from '../engine/env.mjs';
-import { AnnotationSchema } from '../engine/boqo/stranger.mjs';
-import { extractFrames, frameLabel } from '../engine/boqo/stranger-frames.mjs';
-import { strangerContent, strangerTranscript } from '../engine/boqo/stranger-prompt.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const [{ JOURNAL, writeAtomic }, { AnnotationSchema }, { extractFrames, frameLabel }, { strangerContent, strangerTranscript }] = await needPackages(() =>
+  Promise.all([
+    import('../engine/order.mjs'),
+    import('../engine/boqo/stranger.mjs'),
+    import('../engine/boqo/stranger-frames.mjs'),
+    import('../engine/boqo/stranger-prompt.mjs'),
+  ]),
+);
 
 // The hosted worker's STRANGER_MAX_FRAMES default (apps/worker/src/stranger/config.ts).
 const MAX_FRAMES = 12;

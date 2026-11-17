@@ -6,7 +6,6 @@
 // A v1 kit (preset, colors, font, hook) is converted in memory on load (`migrateV1`) and is written back as v2 only
 // when the person next saves it with brand.mjs.
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join } from 'node:path';
 import { BrandCaptions } from './boqo/caption-overrides.mjs';
 import { GALLERY_CAPTION_STYLES, GALLERY_CAPTION_STYLE_KEYS } from './boqo/caption-styles.mjs';
@@ -14,6 +13,7 @@ import { BrandHeadline, DEFAULT_HEADLINE } from './boqo/headline.mjs';
 import { HEADLINE_STYLE_KEYS } from './boqo/headline-styles.mjs';
 import { DEFAULT_TEMPLATE_CAPTIONS } from './captions.mjs';
 import { DEFAULT_TEMPLATE_HEADLINE, DEFAULT_TEMPLATE_LOGO, logoProblems } from './headline.mjs';
+import { boqoHome } from './env.mjs';
 
 export const BRAND_VERSION = 2;
 export const RATIOS = ['9:16'];
@@ -32,7 +32,8 @@ const V1_SECTION_KEYS = {
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
 const LOGO_NAMES = ['logo.png', 'logo.jpg'];
 
-export const boqoHome = () => process.env.BOQO_HOME || join(homedir(), '.boqo');
+// engine/env.mjs holds it, so the tools that need no npm package (the doctor, whisper) do not load this file's zod.
+export { boqoHome };
 export const brandsDir = () => join(boqoHome(), 'brands');
 const kitDir = (name) => join(brandsDir(), name);
 const defaultFile = () => join(brandsDir(), 'default.txt');

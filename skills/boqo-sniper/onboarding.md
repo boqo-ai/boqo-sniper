@@ -1,4 +1,4 @@
-<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ f50f844; keep in step -->
+<!-- copied from boqo-ai/boqo-clips skills/boqo-clips/onboarding.md @ cd91bb8; keep in step -->
 # Onboarding
 
 Runs from INSTALL.md step 6, and from a start that finds no brand kit or no `<home>/boqo-sniper/config.json` (SKILL.md →
@@ -6,11 +6,14 @@ Starting, step 2). Three parts, in order: the brand kit, the boqo connection, th
 a part that is done: a kit `node "$HOME/.boqo-sniper/tools/brand.mjs" list` already shows (kits are shared by every boqo
 skill, so another one may have made it), the rule already in `config.json`.
 
-If the person says "defaults" (or "skip", or gives no brand), take the Default kit: save `{"version": 2, "name": "default"}` with `brand.mjs save` (no logo), ask no questions, render no samples, and go on to part 2.
+If the person says "defaults" (or "skip", or gives no brand), take the Default kit: write
+`{"version": 2, "name": "default"}` to `<samples>/default.json` (`<samples>` is below; `mkdir -p` it first), save it
+with `node "$HOME/.boqo-sniper/tools/brand.mjs" save "<samples>/default.json"` (no logo), then `rm -rf "<samples>"`.
+Ask no questions, render no samples, and go on to part 2.
 
 Open with two sentences: in about two minutes you set up their brand kit (a name, a logo, two colours, and a caption
-style they pick by looking at it), then start watching their Twitch or Kick channel. When they already named a channel, say
-its watch starts right after.
+style they pick by looking at it), then start watching their Twitch channel (or a Kick one: experimental). When they
+already named a channel, say its watch starts right after.
 
 ## 1. The brand kit
 
@@ -149,4 +152,4 @@ The rule and the sensitivity change only when the person says so ("post them aut
 moments"): rewrite the file then.
 
 Onboarding is done. With a channel from the person, go on at SKILL.md → Starting, step 2; without one, ask which
-Twitch or Kick channel.
+Twitch channel (Kick works too, as an experiment).

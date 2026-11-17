@@ -10,16 +10,18 @@
 //   in clips.json, as the panels read finds it), or `--src <file>`, the whole video or a local file. The words:
 //   <run>/words.json unless --words. The brand: the kit named by --brand, else the default kit, else boqo's Default
 //   template with no logo.
-//   Prints one JSON line, {"rendered":[{"n","file","thumb","seconds","notes"}],"failed":[{"n","error"}]}: exit 0 when
-//   nothing failed, 1 when a clip failed (the others still render). {"error":"..."} and exit 1 when nothing could
-//   start.
+//   Prints one JSON line, {"rendered":[{"n","file","thumb","seconds","notes"}],"failed":[{"n","error"}],"notes":[…]}:
+//   exit 0 when nothing failed, 1 when a clip failed (the others still render). The top-level `notes` (absent when
+//   none) are the run's, said once: a kit with no logo. {"error":"..."} and exit 1 when nothing could start.
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { loadBlazeFace } from '../engine/blazeface.mjs';
-import { defaultBrand, defaultBrandName, loadBrand } from '../engine/brand.mjs';
-import { JOURNAL, selectRows, writeAtomic } from '../engine/order.mjs';
-import { PanelsError, sourceOf } from '../engine/panels-read.mjs';
-import { realExec, renderClip } from '../engine/render.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const [{ defaultBrand, defaultBrandName, loadBrand }, { JOURNAL, selectRows, writeAtomic }, { PanelsError, sourceOf }, { NO_LOGO_NOTE, realExec, renderClip }] =
+  await needPackages(() =>
+    Promise.all([import('../engine/brand.mjs'), import('../engine/order.mjs'), import('../engine/panels-read.mjs'), import('../engine/render.mjs')]),
+  );
 
 // The one JSON line and the exit code, carried to the end of main rather than printed with process.exit: once
 // onnxruntime-node is loaded, process.exit() aborts the process on macOS (`libc++abi: ... mutex lock failed: Invalid
@@ -104,6 +106,8 @@ async function main(argv) {
     fail(err.message);
   }
 
+  const runNotes = brand.logo && brand.logo.file ? [] : [NO_LOGO_NOTE];
+
   // The source of each row before any render starts, so a missing section stops the batch before it costs anything.
   const sources = new Map();
   for (const row of rows) {
@@ -151,7 +155,7 @@ async function main(argv) {
     }
   }
   await detector?.release?.();
-  say({ rendered, failed }, failed.length > 0 ? 1 : 0);
+  say({ rendered, failed, ...(runNotes.length > 0 ? { notes: runNotes } : {}) }, failed.length > 0 ? 1 : 0);
 }
 
 // A section file shorter than its clip is the wrong file for it (sections.json from another set of picks): refuse it

@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { toolEnv } from './env.mjs';
-import { writeAtomic } from './order.mjs';
+import { JOURNAL, writeAtomic } from './order.mjs';
 import { clipToWindowSec, cutsDurationSec } from './boqo/cut-map.mjs';
 import { PanelDecision, PanelProbe, PanelSample } from './boqo/panels.mjs';
 import { enoughFrames, frameArgs, readFrameFile, sampleTimes } from './boqo/panels-frames.mjs';
@@ -86,6 +86,13 @@ export function loadRecord(run) {
 }
 
 const saveRecord = (run, record) => writeAtomic(join(run, 'clips.json'), `${JSON.stringify(record, null, 2)}\n`);
+
+// An interrupted `clips order` writes its stored record over clips.json when it is finished (engine/order.mjs
+// finishJournal), and renumbers the clips: a probe or read recorded before that would be lost, and frames read now
+// would carry an old number. render and stranger refuse the same way.
+function refusePending(run) {
+  if (existsSync(join(run, JOURNAL))) throw new PanelsError('an interrupted order is pending: run clips.mjs order first, then run this again');
+}
 
 /** The rows of the render set, by `n`. */
 export function renderRows(record) {
@@ -184,6 +191,7 @@ const ProbeWire = z.object({ isStream: z.boolean(), gameTitle: z.string().nullab
 
 /** Stores the agent's probe answer, `{isStream, gameTitle}`, as `panelProbe` in clips.json. */
 export function recordProbe({ run, file }) {
+  refusePending(run);
   const answer = ProbeWire.safeParse(readJson(file, 'the probe file'));
   if (!answer.success) {
     throw new PanelsError(`the probe file must be {"isStream": true|false, "gameTitle": "<name>"|null}: ${answer.error.issues[0]?.message ?? ''}`.trim());
@@ -209,6 +217,7 @@ const hostedWords = (words) => words.map((x) => ({ word: x.w, start: x.s, end: x
  * Returns `{ asked: false, reason }` or `{ asked: true, n, frames, shots, width, dir, turn }`.
  */
 export async function readFrames({ run, n, src, wordsFile, exec = defaultExec }) {
+  refusePending(run);
   const record = loadRecord(run);
   const row = record.clips.find((r) => r.n === n);
   if (row === undefined) throw new PanelsError(`clips.json has no clip ${n}`);
@@ -271,6 +280,7 @@ const ReadWire = z.object({
  * Returns `{ ok: true, n, content, gameTitle, samples, frames, dropped }`.
  */
 export function recordRead({ run, n, file }) {
+  refusePending(run);
   const record = loadRecord(run);
   const row = record.clips.find((r) => r.n === n);
   if (row === undefined) throw new PanelsError(`clips.json has no clip ${n}`);

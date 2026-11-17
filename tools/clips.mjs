@@ -8,7 +8,9 @@
 //   summary  prints one line a rendered clip, in order, and `+N not rendered` last when some are not.
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { reorderRun, summaryLines } from '../engine/order.mjs';
+import { needPackages } from '../engine/packages.mjs';
+
+const { reorderRun, summaryLines } = await needPackages(() => import('../engine/order.mjs'));
 
 const say = (obj, code) => {
   process.stdout.write(JSON.stringify(obj) + '\n');
