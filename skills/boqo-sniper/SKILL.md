@@ -1,6 +1,6 @@
 ---
 name: boqo-sniper
-description: "Use when the person wants to clip a live Twitch or Kick stream as it happens, or runs /boqo-sniper: a live session on their own PC that watches one channel, catches the moments chat goes wild, and turns each into branded vertical 9:16 clips with captions and their logo (yt-dlp, ffmpeg, whisper.cpp), through the Clips path and posted through boqo only on their rule."
+description: "Use when the person wants to clip a live Twitch stream (or a Kick one, experimental) as it happens, or runs /boqo-sniper: a live session on their own PC that watches one channel, catches the moments chat goes wild, and turns each into branded vertical 9:16 clips with captions and their logo (yt-dlp, ffmpeg, whisper.cpp), through the Clips path and posted through boqo only on their rule."
 argument-hint: "<twitch or kick channel or link> [brand name]"
 ---
 
@@ -8,12 +8,13 @@ argument-hint: "<twitch or kick channel or link> [brand name]"
 
 ## Overview
 
-You watch one live Twitch or Kick stream from this machine and clip it while it runs. A watcher in the background
-records the stream into a 6-minute buffer (the window, 300 s, and 60 s), reads its chat and its loudness, and cuts a
-300 s moment each time boqo's detector fires on a chat or sound spike. A moment at or above the bar goes through the
-Clips path (The loop, step 2): you select its clips (`select.md`) and read its frames (`panels.md`, `stranger.md`),
-the tools render them in the person's brand, and they post only by their rule (`post.md`); one below the bar is
-listed for "clip it". Everything runs on this PC; boqo's servers are touched only to post.
+You watch one live Twitch stream (or a Kick one: experimental) from this machine and clip it while it runs. A
+watcher in the background records the stream into a 6-minute buffer (the window, 300 s, and 60 s), reads its chat and
+its loudness, and cuts a 300 s moment each time boqo's detector fires on a chat or sound spike. A moment at or above
+the bar goes through the Clips path (The loop, step 2): you select its clips (`select.md`) and read its frames
+(`panels.md`, `stranger.md`), the tools render them in the person's brand, and they post only by their rule
+(`post.md`); one below the bar is listed for "clip it". Everything runs on this PC; boqo's servers are touched only
+to post.
 
 **This is a live session, not a run.** It lasts until the person says stop or the stream has been offline for 10
 minutes. Starting `/boqo-sniper` again starts a new watch. One watch per chat; two channels are
@@ -40,9 +41,9 @@ two chats, as many as the PC carries.
   because the next watch of the channel deletes moments older than a day.
 - **Paths in commands:** write `<home>`, `<moment>`, `<clips>` and every other path out in full, as the absolute
   path, inside double quotes, in every command, and `<channel>` and `<name>` in double quotes too:
-  `"/Users/ana/.boqo/boqo-sniper/clips/somechannel/20261115-220301/clip-01.mp4"`. A shell variable set in one command
-  is gone in the next (Claude Code runs each command in a new shell), and a home folder can hold a space. A path you
-  delete is never empty and never relative.
+  `"/Users/ana/.boqo/boqo-sniper/clips/twitch-somechannel/20261115-220301/out/clip-01.mp4"`. A shell variable set in
+  one command is gone in the next (Claude Code runs each command in a new shell), and a home folder can hold a space.
+  A path you delete is never empty and never relative.
 
 ## Rules
 
@@ -51,9 +52,9 @@ two chats, as many as the PC carries.
   your own capture, ffmpeg or yt-dlp commands, except the ones this file gives.
 - **Never post without the rule** in `<home>/boqo-sniper/config.json`. With `ask` (the default), every post waits
   for the person's yes. `post_video` goes once per clip, never again after an unclear reply (Posting).
-- **Twitch and Kick.** Any other link: say this watches Twitch and Kick only, and stop. A watcher that ends with
-  `kick refused: <status>` (or `kick lookup timed out`): Kick's channel API did not answer from this network. Say that
-  in one line and stop.
+- **Twitch and Kick.** Any other link: say this watches Twitch and Kick only, and stop. Kick is experimental: kick.com
+  sits behind Cloudflare, which can turn this network away. A watcher that ends with `kick refused: …`,
+  `kick refused the capture: …` or `kick lookup timed out …`: say so in one line, in its words, and stop.
 - **Quiet while waiting.** A `timeout` from `next.mjs` is not news: call it again and say nothing. The person hears
   about clips, the status line, and the end.
 - **The watcher ending is news.** In Claude Code, when the background task running `watch.mjs` completes, run
@@ -66,13 +67,16 @@ two chats, as many as the PC carries.
   two on a CPU. Give every command in the loop up to 10 minutes (Claude Code: the shell tool's `timeout` of 600000).
 - **Disk:** the watcher keeps about 320 MB of buffer while it runs (1080p60, 360 s), and every moment adds about
   260 MB until you delete its `video.mp4`. It does not cut a new moment while 10 wait for you or less than 5 GB is
-  free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`). Moments below the bar are no queue; the newest
-  3 are kept (`dropped` counts older ones deleted). `status.mjs` carrying `lowDisk` means the disk is under 5 GB free
-  now and nothing will be cut: say so once; a full queue of 10 needs 7 to 8 GB free at the start.
+  free, and counts those in `status.mjs`'s `skipped` (`queue`, `disk`). Moments below the bar are held apart, up to
+  10, each until it is taken or the watch ends; at 10, a new one replaces the one told longest ago when that was 15
+  minutes ago or more (`dropped` counts those), and is not cut otherwise (a `queue` skip). `status.mjs` carrying
+  `lowDisk` means the disk is under 5 GB free now and nothing will be cut: say so once; a full queue of 10 needs 7 to
+  8 GB free at the start.
 - **The person can talk to you between tool calls.** Answer them, then go back to the loop where you left it.
 - Install nothing without the person's yes; never run `npm install`. An error naming ffmpeg, ffprobe, yt-dlp or
   whisper-cli: run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required` and give the person its
-  `hints`.
+  `hints`. `Cannot find package 'zod'` (or `'onnxruntime-node'`): the npm packages are missing, as after an update that
+  only pulled; `"$HOME/.boqo-sniper/INSTALL.md"` → Updating installs them, after the person's yes.
 - **The capture is yt-dlp,** ads and all. streamlink skips Twitch's ads but is untested in this beta: only when the
   person asks for it, add `"capture": "streamlink"` to `config.json` (the watcher reads it at start; streamlink must be
   installed). Never suggest it unasked.
@@ -101,7 +105,9 @@ two chats, as many as the PC carries.
    yt-dlp -q --no-warnings --print is_live "https://www.twitch.tv/<login>"      # Kick: "https://kick.com/<slug>"
    ```
    `True` is live. `… does not exist`: say so, and stop. `… is not currently live`: say the channel is offline, and
-   offer to start anyway (the watch waits for it, and ends after 10 minutes offline). On a no, stop.
+   offer to start anyway (the watch waits for it, and ends after 10 minutes offline). On a no, stop. Kick,
+   `HTTP Error 403`: kick.com turned this network away (Kick is experimental, behind Cloudflare; yt-dlp also needs a
+   browser to impersonate, `yt-dlp --list-impersonate-targets`): say so in one line, and stop.
 4. **Start the watcher in the background,** so this chat stays free. First `date -u +%Y%m%d-%H%M%S`: keep it as
    `<start stamp>`. Then:
    - Claude Code: the shell tool with `run_in_background: true`, and the command
@@ -148,7 +154,8 @@ Repeat until The end.
    - `{"timeout": true, "status": {…}}`: run step 1 again, silently. When `status.updatedAt` is more than 4 minutes
      old, the watcher died without a word: run `stop.mjs "<channel>"` (it cleans up, and never signals a process that
      is not the watcher), tell the person, offer to start again (Starting, step 3), and go to The end.
-   - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end.
+   - `{"stopped": "<state>"}`, or `{"stopped": "failed", "error": "…"}`: The end. `{"stopped": "no-session"}`: this
+     channel has no watch folder any more; say the watch is gone, and offer to start again (Starting, step 3).
 2. **The moment flow,** the Clips path on the moment's window. Moments wait while you do it; the watch keeps
    recording.
    1. **Start:** whisper on the window, then the selection request.
@@ -176,8 +183,9 @@ Repeat until The end.
       - `"budgetSpent": true` on any line: the hour's image budget (`visionPerHour`) is spent. Say once: "This hour's
         image budget is spent: the next clips render without new reads."
       - `{"done": true, "clips": [...], "failed": [...], "runsLine"}`: the moment is over. One line per clip, best
-        first: its title, its length (`seconds`, whole) and its `file`. A failed clip: its `error`, in one line. The
-        moment's `video.mp4` is deleted, and its `runsLine` is in `runs.md` (step 4).
+        first: its title, its length (`seconds`, whole) and its `file`. A failed clip: its `error`, in one line.
+        `overlapped`: clips left out before render, since an earlier moment of this watch already made that footage;
+        say how many, in one line. The moment's `video.mp4` is deleted, and its `runsLine` is in `runs.md` (step 4).
 3. **Post** a moment's clips by the rule (Posting).
 4. **The log.** `step` wrote the moment's line in `<home>/boqo-sniper/runs.md`:
    `21:04 · 86 exceptional · NO WAY ×168 · 30/s · <title> · 4 clips`: the local time, the score and its band, the
@@ -192,7 +200,7 @@ makes a moment of score 100 at this second; it arrives from `next.mjs` about 35 
 `{"clipNow": false, "reason": "buffer empty" | "stream <state>" | "disk"}` says nothing will be cut: tell the person why. "Clip it"
 (about a moment you told them is below the bar): `next.mjs "<channel>" --take` claims the newest listed one, or
 `--take "<moment name>"` that one; `next.mjs "<channel>" --list` lists them. Both go on at step 2, with the
-`moment` the line names.
+`moment` the line names. `… may have been dropped …`: say it is gone, in one line.
 
 **The status line.** Every 10 moments, or every 30 minutes since the last thing you told the person, whichever comes
 first, one line: `Watching <channel>: <watched time>, <moments> moments, <kept> clips.` Nothing else while it is
@@ -251,7 +259,8 @@ says to finish them, run `next.mjs` and the loop on each, until it says `stopped
 - `stopped`: after a stop;
 - `offline`: the stream was offline for 10 minutes;
 - `failed`: the watcher ended on an error. Tell the person the `error` in one line, and offer to start again
-  (Starting, step 3).
+  (Starting, step 3);
+- `no-session`: the channel's watch folder is gone; say so, and offer to start again (Starting, step 3).
 
 Then:
 1. **The posts.** This session's posts:
@@ -265,14 +274,13 @@ Then:
    (`clipped`), clips kept (`clips`), posted (step 1's lines), moments left unclipped, moments the watcher did not cut
    (`skipped`: `queue`, too many waiting; `disk`, too little free), any post that failed (step 1), and the folder
    `<home>/boqo-sniper/clips/<channel folder>/`.
-3. **Log** one line: `<YYYY-MM-DD HH:MM> | <channel> <session name> | end <state> | watched <h:mm> | <m> moments | <k> clips | <s> skipped | <p> posted`.
-4. **Moments left unclaimed:** offer to delete their videos (about 260 MB each). On a yes, with `<session>` written
+3. **Moments left unclaimed:** offer to delete their videos (about 260 MB each). On a yes, with `<session>` written
    out:
    ```sh
    for d in "<session>/moments/"*/; do [ -f "${d}.taken" ] || rm -f "${d}video.mp4"; done
    ```
    Their small files stay.
-5. `offline`: offer to start again when the channel is back live.
+4. `offline`: offer to start again when the channel is back live.
 
 **Settings.** In `<home>/boqo-sniper/config.json`, read when a watch starts; hosted's ranges, a whole number:
 

@@ -1,9 +1,10 @@
 # boqo-sniper
 
-Watch a Twitch or Kick stream live on your own PC and clip the moments chat goes wild, with your brand.
+Watch a Twitch stream live on your own PC and clip the moments chat goes wild, with your brand. Kick works too, as an
+experiment (see Beta).
 
-You name a Twitch or Kick channel (`kick:<slug>` or `kick.com/<slug>`) and your agent starts a live session. A watcher
-records the stream in the background, reads its chat and listens to its sound. When chat explodes, it cuts the last
+You name a Twitch channel, or a Kick one (`kick:<slug>` or `kick.com/<slug>`), and your agent starts a live session. A
+watcher records the stream in the background, reads its chat and listens to its sound. When chat explodes, it cuts the last
 five minutes, with the peak about 270 s in. Your agent then runs it through boqo's Clips pipeline: it transcribes the
 moment, selects its clips, reads the stream's layout (camera and game) and judges each clip as a stranger would, and
 renders every clip, at most 10, as 9:16 shorts with burned-in captions and your logo. It posts a clip only by the rule
@@ -48,7 +49,9 @@ Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai
 - One watch per agent session. To watch two channels, open two sessions, as many as your PC carries.
 - Disk while live: about 320 MB for the 6-minute buffer (300 s window plus 60 s) at 1080p60, plus about 260 MB for each
   moment waiting for your agent. At most 10 wait (about 2.6 GB); past that, or with less than 5 GB free, the watcher
-  skips new moments (the floor is checked against the free space at each cut, so a full queue of 10 needs 7 to 8 GB free at the start). Moments below your bar are listed for "clip it" and the newest 3 are kept.
+  skips new moments (the floor is checked against the free space at each cut, so a full queue of 10 needs 7 to 8 GB
+  free at the start). Moments below your bar are listed for "clip it", up to 10 more: each stays until you take it or
+  the watch ends, except that at 10 a new one replaces one you heard of at least 15 minutes earlier.
 - The capture is the stream as it is sent (1080p60 on most channels), copied, never re-encoded. The CPU works hard only
   when a moment comes in: whisper and the render take a few minutes.
 
@@ -61,8 +64,9 @@ judgment).
 
 ## Beta
 
-Twitch and Kick. Kick's endpoints are undocumented and sit behind Cloudflare: from a network they refuse, the watcher
-ends with `kick refused: <status>`.
+Twitch, and Kick as an experiment. Kick's endpoints are undocumented and sit behind Cloudflare, and yt-dlp asks them
+by impersonating a browser, which needs its `curl_cffi` extra. From a network they refuse, the watch ends at once and
+says so (`kick refused: …` or `kick refused the capture: …`).
 
 ## The engine
 

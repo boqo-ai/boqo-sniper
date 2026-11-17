@@ -72,8 +72,8 @@ hold a space); `~` does not expand inside quotes, so the commands use `"$HOME/..
 
 6. **Start now, in this chat.** Read `<skills>/boqo-sniper/SKILL.md`, then `<skills>/boqo-sniper/onboarding.md`, and
    run onboarding. It opens with what the next minutes give them (their brand kit, then a live watch of a Twitch
-   or Kick channel that clips the moments chat goes wild) and roughly how long. When the person already named a channel,
-   onboarding ends by starting its watch.
+   channel, or a Kick one as an experiment, that clips the moments chat goes wild) and roughly how long. When the
+   person already named a channel, onboarding ends by starting its watch.
 
 ## If something fails
 
@@ -89,8 +89,15 @@ hold a space); `~` does not expand inside quotes, so the commands use `"$HOME/..
 
 ```sh
 git -C "$HOME/.boqo-sniper" pull --ff-only
+```
+
+Then the npm packages, which a new version may change (about 260 MB). Ask the person once, as in step 4; on a yes:
+
+```sh
 cd "$HOME/.boqo-sniper" && npm ci --omit=dev --ignore-scripts
 ```
+
+On a no, say the skill may not run until they are installed (`Cannot find package …`).
 
 A copied folder (step 3, on Windows without real links) is updated by copying the files into it again, after the
 person's yes (the `/.` copies the folder's contents, never a second folder inside it):
