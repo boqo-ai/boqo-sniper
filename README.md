@@ -1,11 +1,13 @@
 # boqo-sniper
 
-Watch a Twitch stream live on your own PC and clip the moments chat goes wild, with your brand.
+Watch a Twitch or Kick stream live on your own PC and clip the moments chat goes wild, with your brand.
 
-You name a Twitch channel and your agent starts a live session. A watcher records the stream in the background,
-reads its chat and listens to its sound. When chat explodes, it cuts the last couple of minutes. Your agent then
-transcribes the moment, judges whether it works as a clip, and renders a 9:16 short with burned-in captions and your
-logo. It posts the clip only by the rule you set. The session runs until you say stop or the stream ends.
+You name a Twitch or Kick channel (`kick:<slug>` or `kick.com/<slug>`) and your agent starts a live session. A watcher
+records the stream in the background, reads its chat and listens to its sound. When chat explodes, it cuts the last
+five minutes, with the peak about 270 s in. Your agent then runs it through boqo's Clips pipeline: it transcribes the
+moment, selects its clips, reads the stream's layout (camera and game) and judges each clip as a stranger would, and
+renders every clip, at most 10, as 9:16 shorts with burned-in captions and your logo. It posts a clip only by the rule
+you set. The session runs until you say stop or the stream ends.
 
 <!-- demo GIF -->
 
@@ -25,6 +27,8 @@ brand kit.
 - ffmpeg with libass
 - yt-dlp
 - whisper.cpp (`whisper-cli`) and a model; it writes every clip's captions
+- two npm packages, zod and onnxruntime-node (the face model; about 260 MB), installed in `~/.boqo-sniper` with your
+  yes
 
 The watcher records with yt-dlp, ads and all. streamlink, which skips Twitch's ads, is opt-in and untested in this
 beta: `"capture": "streamlink"` in `~/.boqo/boqo-sniper/config.json` turns it on.
@@ -33,7 +37,7 @@ The install's doctor names what is missing and how to get it on macOS, Windows a
 
 ## What runs where
 
-Everything runs on your PC: the capture, chat, transcription, judging (by your own agent's model) and render. Your
+Everything runs on your PC: the capture, chat, transcription, selection (by your own agent's model) and render. Your
 clips stay on your disk. Posting goes through boqo: autoposting comes with the 3-day trial, or with Starter from $12.
 Without boqo you keep the files.
 
@@ -42,14 +46,23 @@ Want boqo to do the whole job instead? Hand it over at [boqo.ai](https://boqo.ai
 ## Hardware
 
 - One watch per agent session. To watch two channels, open two sessions, as many as your PC carries.
-- Disk while live: about 650 MB for the 12-minute buffer at 1080p60, plus about 140 MB for each moment waiting to be
-  judged. At most 10 wait (about 2 GB in all); past that, or with less than 3 GB free, the watcher skips new moments.
-- The capture is the stream as Twitch sends it (1080p60 on most channels), copied, never re-encoded. The CPU works
-  hard only when a moment comes in: whisper and the render take a minute or two each.
+- Disk while live: about 320 MB for the 6-minute buffer (300 s window plus 60 s) at 1080p60, plus about 260 MB for each
+  moment waiting for your agent. At most 10 wait (about 2.6 GB); past that, or with less than 5 GB free, the watcher
+  skips new moments (the floor is checked against the free space at each cut, so a full queue of 10 needs 7 to 8 GB free at the start). Moments below your bar are listed for "clip it" and the newest 3 are kept.
+- The capture is the stream as it is sent (1080p60 on most channels), copied, never re-encoded. The CPU works hard only
+  when a moment comes in: whisper and the render take a few minutes.
+
+## Settings
+
+In `~/.boqo/boqo-sniper/config.json`, read when a watch starts: `sensitivity` 30 to 95 (70), `autoClip` (on),
+`autoClipMinScore` 50 to 95 (80), `windowSec` 120 to 600 (300), `prompt` (what to watch for, 300 characters),
+`visionPerHour` (600 images an hour, about 5 moments: past it, clips render with the last layout read and no
+judgment).
 
 ## Beta
 
-Twitch only in this beta. Kick comes next.
+Twitch and Kick. Kick's endpoints are undocumented and sit behind Cloudflare: from a network they refuse, the watcher
+ends with `kick refused: <status>`.
 
 ## The engine
 

@@ -32,6 +32,35 @@ function speakerStripped(text, atStart) {
   return t === '-' || MARK_ONLY.test(t) ? '' : t;
 }
 
+// A token with no letter, digit or mark is punctuation (`,` `.` `%` `—`): captions burn a word at a time, so it
+// must ride on a neighbour. Observed (2026-11-16) on a json3 track: "," "." ";" "%" arrived as words of their own
+// and the captions showed ", YET IT STILL".
+const HAS_TEXT = /[\p{L}\p{N}\p{M}]/u;
+// what opens a phrase: it belongs to the word AFTER it
+const OPENING = /^[(\[{¿¡“‘«$£€¥#@]+$/u;
+
+/**
+ * Joins every punctuation-only word to a neighbour: to the word before it, or, for an opening mark (`¿` `(`
+ * `$`) and when nothing comes before, to the word after. The joined word keeps `s` of its first part and `e` of
+ * its last. Punctuation with no word beside it at all is dropped.
+ * @param {Word[]} words in time order
+ * @returns {Word[]}
+ */
+function joinPunctuation(words) {
+  const out = [];
+  let lead = null;
+  for (const x of words) {
+    if (HAS_TEXT.test(x.w)) {
+      out.push(lead ? { w: lead.w + x.w, s: lead.s, e: x.e } : x);
+      lead = null;
+    } else if (out.length && !OPENING.test(x.w)) {
+      const prev = out[out.length - 1];
+      out[out.length - 1] = { w: prev.w + x.w, s: prev.s, e: Math.max(prev.e, x.e) };
+    } else lead = lead ? { w: lead.w + x.w, s: lead.s, e: x.e } : x;
+  }
+  return out;
+}
+
 const GUESS_WORD_MS = 400;
 
 const segText = (seg) => (typeof seg?.utf8 === 'string' ? seg.utf8.replace(/\s+/g, ' ').trim() : '');
@@ -55,6 +84,7 @@ const segText = (seg) => (typeof seg?.utf8 === 'string' ? seg.utf8.replace(/\s+/
  *
  * A word ends where the next one starts, and never runs longer than one
  * second; the last word ends at its event's end, also capped.
+ * A word with no letter or digit (`,` `.` `%`) is joined to the word before it (`joinPunctuation`).
  * @param {object} j parsed json3
  * @returns {Word[]}
  */
@@ -125,7 +155,7 @@ export function wordsFromJson3(j) {
   }
   raw.sort((a, b) => a.startMs - b.startMs);
   const spoken = dropNonSpeech(raw, (r) => r.w);
-  return spoken.map((r, i) => {
+  return joinPunctuation(spoken.map((r, i) => {
     const s = r.startMs / 1000;
     const cap = s + MAX_WORD_SEC;
     const next = spoken[i + 1];
@@ -133,7 +163,7 @@ export function wordsFromJson3(j) {
     e = Math.min(e, cap, r.spanEndMs === undefined ? Infinity : r.spanEndMs / 1000);
     if (e <= s) e = s + MIN_WORD_SEC;
     return { w: r.w, s: round3(s), e: round3(e) };
-  });
+  }));
 }
 
 // whisper's non-speech items: wholly bracketed ([BLANK_AUDIO], [Music],
@@ -241,12 +271,31 @@ function spreadStacked(words) {
 // a word's start back into the silence before it (captions came ~8 s early).
 const longestWordSec = (text) => Math.min(1.2, 0.25 + 0.09 * [...text].length);
 
+// whisper decodes in 30 s windows and, where two meet, sometimes hears a lone
+// "Oh" in the seam. A word that starts within WINDOW_EDGE_MS of a window edge
+// (the audio's own start is no seam) and has no other word within
+// WINDOW_NEIGHBOUR_MS, edge to edge, is that artefact. `ms` are whisper's raw
+// offsets, so the grid is the audio's, whatever the cut offset.
+const WINDOW_MS = 30000;
+const WINDOW_EDGE_MS = 300;
+const WINDOW_NEIGHBOUR_MS = 1000;
+
+function dropLoneEdgeWords(items) {
+  return items.filter((it, i) => {
+    const d = it.from % WINDOW_MS;
+    const atSeam = (it.from >= WINDOW_MS && d < WINDOW_EDGE_MS) || d > WINDOW_MS - WINDOW_EDGE_MS;
+    if (!atSeam) return true;
+    return items.some((o, j) => j !== i && o.from - it.to <= WINDOW_NEIGHBOUR_MS && it.from - o.to <= WINDOW_NEIGHBOUR_MS);
+  });
+}
+
 /**
  * Words from whisper.cpp `-oj` JSON (`offsets` are milliseconds). Non-speech
  * items (`[BLANK_AUDIO]`, `(music)`, `♪`) and sound tags split across items
  * (`(upbeat` + `music)`) are dropped. A word's start is pulled to at most
  * min(1.2, 0.25 + 0.09 x its characters) seconds before its end. Words stacked
- * on one timestamp are spread out.
+ * on one timestamp are spread out. A lone word at a 30 s window seam is dropped.
+ * A word with no letter or digit (`,` `.` `%`) is joined to the word before it (`joinPunctuation`).
  * @param {object} j parsed whisper JSON
  * @param {number} [offsetSec] added to every time, for a cut that starts later
  * @returns {Word[]}
@@ -261,7 +310,7 @@ export function wordsFromWhisper(j, offsetSec = 0) {
     if (!text || from === null || to === null) continue;
     kept.push({ text, from, to });
   }
-  const out = dropNonSpeech(kept, (x) => x.text).map(({ text, from, to }) => {
+  const out = dropLoneEdgeWords(dropNonSpeech(kept, (x) => x.text)).map(({ text, from, to }) => {
     const start = offsetSec + from / 1000;
     const end = offsetSec + to / 1000;
     const s = round3(Math.max(start, end - longestWordSec(text)));
@@ -270,7 +319,7 @@ export function wordsFromWhisper(j, offsetSec = 0) {
     return { w: text, s, e, s0: round3(start) };
   });
   spreadStacked(out.sort((a, b) => a.s0 - b.s0));
-  return out.map(({ w, s, e }) => ({ w, s, e })).sort((a, b) => a.s - b.s);
+  return joinPunctuation(out.map(({ w, s, e }) => ({ w, s, e })).sort((a, b) => a.s - b.s));
 }
 
 /**

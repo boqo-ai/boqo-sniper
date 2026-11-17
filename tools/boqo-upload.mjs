@@ -2,8 +2,10 @@
 // The mechanical parts of publishing through boqo's MCP (copied from boqo-ai/boqount, MIT).
 //
 //   node <skill>/tools/boqo-upload.mjs probe <file>                  size, container, codecs, fps, and whether boqo takes it as it is
+//   node <skill>/tools/boqo-upload.mjs probe-audio <file>            an audio file for boqo's transcribe: size, content type, length, minutes and credits
 //   node <skill>/tools/boqo-upload.mjs name <caption…>               the upload file name for a Post with that caption
-//   node <skill>/tools/boqo-upload.mjs put <file> --reply <reply.json>   PUT the parts of a create_upload reply saved to <reply.json>
+//   node <skill>/tools/boqo-upload.mjs caption --title <t> [--hook <h>] [--tags a,b]   the post's words per platform, as hosted writes them
+//   node <skill>/tools/boqo-upload.mjs put <file> --reply <reply.json>   PUT the parts of a create_upload reply (a Post's projectId or a transcribe upload's upload_id) saved to <reply.json>
 //
 // Prints one JSON line and exits 0, or exits 1 with {"error": …} / {"ok": false, …}. No signed URL is ever printed.
 // The logic and why a PUT carries no content-type: engine/boqo-upload-lib.mjs.

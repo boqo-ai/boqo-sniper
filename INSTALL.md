@@ -55,19 +55,24 @@ hold a space); `~` does not expand inside quotes, so the commands use `"$HOME/..
 
       A copy works the same: the skill calls its tools in `~/.boqo-sniper/tools/`.
 
-4. **Check the tools the skill uses.** Run
-   `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required`. It only looks, and prints one
-   JSON line: `ok` is true when every required tool works (Node 22+, ffmpeg with libass and its ffprobe, yt-dlp,
-   which records the stream, and whisper.cpp with a model, which writes the captions of every clip). `hints` says how
-   to install each one that is missing or too old. When the doctor cannot run, `node --version` (it must be 22 or
-   newer). Name what is missing and how the person installs it, in the words of `hints`. Install nothing yourself. A
-   missing tool does not stop the install: say what it is needed for and go on.
+4. **The npm packages,** zod and onnxruntime-node (the face model), about 260 MB. Ask the person once; on a yes:
+   ```sh
+   cd "$HOME/.boqo-sniper" && npm ci --omit=dev --ignore-scripts
+   ```
+   On a no, say the skill cannot run without them (the brand kit and the render use them), and go on. Connect no
+   service and run nothing else: onboarding asks for each of those when it is needed.
 
-5. **Connect no service and run no `npm install`.** Onboarding asks for each of those when it is needed.
+5. **Check the tools the skill uses.** Run `node "$HOME/.boqo-sniper/tools/doctor.mjs" --node 22 --whisper required`.
+   It only looks, and prints one JSON line: `ok` is true when every required tool works (Node 22+, ffmpeg with libass
+   and its ffprobe, yt-dlp, which records the stream, whisper.cpp with a model, which writes the captions of every
+   clip, and onnxruntime, step 4's face model). `hints` says how to install each one that is missing or too old. When
+   the doctor cannot run, `node --version` (it must be 22 or newer). Name what is missing and how the person installs
+   it, in the words of `hints`. Install nothing yourself. A missing tool does not stop the install: say what it is
+   needed for and go on.
 
 6. **Start now, in this chat.** Read `<skills>/boqo-sniper/SKILL.md`, then `<skills>/boqo-sniper/onboarding.md`, and
    run onboarding. It opens with what the next minutes give them (their brand kit, then a live watch of a Twitch
-   channel that clips the moments chat goes wild) and roughly how long. When the person already named a channel,
+   or Kick channel that clips the moments chat goes wild) and roughly how long. When the person already named a channel,
    onboarding ends by starting its watch.
 
 ## If something fails
@@ -84,6 +89,7 @@ hold a space); `~` does not expand inside quotes, so the commands use `"$HOME/..
 
 ```sh
 git -C "$HOME/.boqo-sniper" pull --ff-only
+cd "$HOME/.boqo-sniper" && npm ci --omit=dev --ignore-scripts
 ```
 
 A copied folder (step 3, on Windows without real links) is updated by copying the files into it again, after the

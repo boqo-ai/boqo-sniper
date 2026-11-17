@@ -16,6 +16,24 @@ export const SHARED = [
   'tools/asr.mjs',
   'tools/boqo-upload.mjs',
   'tools/transcript.mjs',
+  // The selection request; engine/select-input.mjs is under engine/ already.
+  'tools/select-request.mjs',
+  // The selection check and record; engine/clips-record.mjs is under engine/ already.
+  'tools/select-check.mjs',
+  // The order of the clips and the chat summary; engine/order.mjs is under engine/ already.
+  'tools/clips.mjs',
+  // The stranger judgment's frames and record; engine/boqo/stranger*.mjs are under engine/ already.
+  'tools/stranger.mjs',
+  // The boqo transcript option: get_transcript's JSON as words.json and segments.json (engine/transcript-boqo.mjs is under engine/ already).
+  'tools/transcript-boqo.mjs',
+  // The stream panels read's frames and record; engine/panels-read.mjs and engine/boqo/panels*.mjs are under engine/ already.
+  'tools/panels.mjs',
+  // The parity harness (engine/boqo/ is already under engine/). Files, not
+  // scripts/parity/: boqo-sniper keeps its own cases in scripts/parity/cases/.
+  'scripts/parity/golden.mjs',
+  'scripts/parity/strip.mjs',
+  'scripts/boqo-drift.mjs',
+  'tests/helpers/golden.mjs',
 ];
 
 export const ENGINE_JSON = 'engine/ENGINE.json';

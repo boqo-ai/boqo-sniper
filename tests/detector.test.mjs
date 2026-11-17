@@ -1,155 +1,185 @@
+// The hosted moment detector (lib/boqo/moments.mjs, ported from boqo's
+// packages/core/src/moments.ts), against goldens boqo's own TypeScript wrote at
+// the pin (scripts/parity/golden.mjs), and the two rules the session relies on:
+// a closed chat socket teaches the detector nothing, and the cooldown runs 45 s
+// from the last peak.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createDetector, thresholdFor } from "../lib/detector.mjs";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  MOMENT_AUDIO_Z_WEIGHT,
+  MOMENT_COOLDOWN_SEC,
+  MOMENT_FALL_RATIO,
+  MOMENT_MIN_CHAT_RATE,
+  MOMENT_RISE_MAX_SEC,
+  MOMENT_WARMUP_SEC,
+  createMomentDetector,
+  scoreFor,
+  sigmaForScore,
+  thresholdFor,
+} from "../lib/boqo/moments.mjs";
+import { expectGolden } from "./helpers/golden.mjs";
 
-// Seeded PRNG so every run sees the same chat. Never Math.random.
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+const input = (name) =>
+  JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "parity", `${name}.input.json`), "utf8"));
+
+test("threshold-for: the ported thresholdFor matches boqo's (3.6 at 30, 2.4 at 70, 1.65 at 95, clamped)", () => {
+  const i = input("threshold-for");
+  expectGolden("threshold-for", i.sensitivities.map((sensitivity) => ({ sensitivity, threshold: thresholdFor(sensitivity) })));
+});
+
+test("score-for: the ported scoreFor and sigmaForScore match boqo's (60 at the bar, 100 at 2.5x it)", () => {
+  const i = input("score-for");
+  expectGolden("score-for", {
+    scores: i.scores.map((c) => ({ ...c, score: scoreFor(c.z, c.threshold) })),
+    sigmas: i.sigmas.map((c) => ({ ...c, sigma: sigmaForScore(c.score, c.threshold) })),
+  });
+});
+
+test("detector-replay: 30 synthetic minutes give boqo's candidates and boqo's signal every second", () => {
+  const i = input("detector-replay");
+  const detector = createMomentDetector({ windowSec: i.windowSec, sensitivity: i.sensitivity });
+  const candidates = [];
+  const signals = [];
+  for (const tick of i.ticks) {
+    const candidate = detector.tick(tick);
+    signals.push(detector.signal());
+    if (candidate) candidates.push({ emittedAt: tick.at, ...candidate });
+  }
+  expectGolden("detector-replay", { candidates, signals });
+});
+
+test("the constants are production's, verbatim", () => {
+  assert.equal(MOMENT_WARMUP_SEC, 60);
+  assert.equal(MOMENT_COOLDOWN_SEC, 45);
+  assert.equal(MOMENT_MIN_CHAT_RATE, 2);
+  assert.equal(MOMENT_AUDIO_Z_WEIGHT, 0.8);
+  assert.equal(MOMENT_RISE_MAX_SEC, 20);
+  assert.equal(MOMENT_FALL_RATIO, 0.6);
+});
+
+// ---- the series the two rules are tested on (after boqo's moments.test.ts) ----
+
+const T0 = Date.UTC(2026, 10, 16, 20, 0, 0);
+const sec = (n) => T0 + n * 1000;
+
+/** A repeating [2,3,4,3,3] chat (mean 3, a flat five-second mean) at -25 LUFS, with overrides. No randomness. */
+function series(seconds, override = () => ({})) {
+  const pattern = [2, 3, 4, 3, 3];
+  return Array.from({ length: seconds }, (_, i) => {
+    const chatCount = pattern[i % pattern.length];
+    return {
+      at: sec(i),
+      chatCount,
+      chatTexts: Array.from({ length: chatCount }, (_, k) => `msg-${i}-${k}`),
+      loudness: -25,
+      chatOpen: true,
+      ...override(i),
+    };
+  });
+}
+
+/** Every candidate, and signal() after every tick. */
+function trace(ticks, extra = {}) {
+  const detector = createMomentDetector({ windowSec: 300, sensitivity: 70, ...extra });
+  const candidates = [];
+  const signals = [];
+  for (const t of ticks) {
+    const c = detector.tick(t);
+    signals.push(detector.signal());
+    if (c) candidates.push(c);
+  }
+  return { candidates, signals };
+}
+
+/** `rate` messages a second over [from, from + length), 70% of them one text. */
+const burst = (from, length, rate, text = "NO WAY") => (i) => {
+  if (i < from || i >= from + length) return {};
+  const same = Math.round(rate * 0.7);
+  return {
+    chatCount: rate,
+    chatTexts: [...Array.from({ length: same }, () => text), ...Array.from({ length: rate - same }, (_, k) => `o-${i}-${k}`)],
   };
-}
+};
 
-const BUCKET = 10;
-const RATE = 2.6; // messages a second
+test("seconds with chatOpen false change neither the chat baseline nor the 5 s window", () => {
+  // The socket is closed 300-359. What the closed seconds carry never reaches
+  // the detector: 80 messages a second there and 0 there give the same signal
+  // every second after, and no moment.
+  const closedWith = (fill) => (i) => (i >= 300 && i < 360 ? { ...fill, chatOpen: false } : {});
+  const empty = trace(series(600, closedWith({ chatCount: 0, chatTexts: [] })));
+  const spam = trace(series(600, closedWith({ chatCount: 80, chatTexts: Array.from({ length: 80 }, () => "SPAM") })));
+  assert.deepEqual(spam, empty);
+  assert.deepEqual(empty.candidates, []);
 
-// One bucket per 10 s from t = 0. `shape(t)` may return { mult, lufsAdd, dead }.
-function makeStream({ seconds, seed = 1, shape = () => ({}) }) {
-  const rand = mulberry32(seed);
-  const out = [];
-  for (let t = 0; t < seconds; t += BUCKET) {
-    const s = shape(t) ?? {};
-    const noise = 1 + (rand() * 2 - 1) * 0.2; // +-20%
-    const lufsNoise = (rand() * 2 - 1) * 1; // +-1 LU
-    let chat = Math.round(RATE * BUCKET * noise * (s.mult ?? 1));
-    let chatters = Math.round(chat * 0.6);
-    if (s.dead) {
-      chat = rand() < 0.4 ? 1 : 0;
-      chatters = rand() < 0.3 ? 1 : 0; // mean 0.3 a bucket
-    }
-    const lufs = s.noAudio ? null : -30 + lufsNoise + (s.lufsAdd ?? 0);
-    out.push({ t, chat, chatters, lufs });
+  // The baseline: a burst at 420 is judged against the chat from before the
+  // drop, 3 a second. The same sixty empty seconds fed as open ones drag it down.
+  const later = burst(420, 8, 40);
+  const closed = trace(series(600, (i) => ({ ...closedWith({ chatCount: 0, chatTexts: [] })(i), ...later(i) })));
+  const openZeros = trace(series(600, (i) => ({ ...(i >= 300 && i < 360 ? { chatCount: 0, chatTexts: [] } : {}), ...later(i) })));
+  assert.equal(closed.candidates.length, 1);
+  assert.ok(Math.abs(closed.candidates[0].detail.chatBaseline - 3) < 0.05, `baseline ${closed.candidates[0].detail.chatBaseline}`);
+  assert.equal(openZeros.candidates.length, 1);
+  assert.ok(openZeros.candidates[0].detail.chatBaseline < 2.7, `open zeros: baseline ${openZeros.candidates[0].detail.chatBaseline}`);
+
+  // The window: a burst cut off by the drop is not scored again when the chat
+  // reopens, and chat scores only on five open seconds. Loudness unknown, so
+  // signal() is the chat's alone: null until the fifth open second (364).
+  const ticks = series(600, (i) => ({
+    loudness: null,
+    ...(i >= 300 && i < 360 ? { chatCount: 0, chatTexts: [], chatOpen: false } : burst(295, 5, 40)(i)),
+  }));
+  const reopened = trace(ticks);
+  assert.equal(reopened.candidates.length, 1, "the burst's moment only, none at the reopen");
+  assert.ok(reopened.candidates[0].peakAt >= sec(295) && reopened.candidates[0].peakAt < sec(300));
+  assert.deepEqual(reopened.signals.slice(300, 364), Array(64).fill(null), "closed, then four open seconds: no chat z");
+  assert.ok(Number.isFinite(reopened.signals[364]), "the fifth open second is scored");
+});
+
+test("cooldown: a second burst 40 s after a peak is not a moment, and one 50 s after is", () => {
+  // One-second bursts, so nothing of the second is left in the five-second
+  // window once 45 s have passed: chat (200 messages in a second) and sound
+  // (a -5 LUFS bang) alike, since the cooldown runs from the last peak
+  // whichever signal made it.
+  const kinds = {
+    chat: (at) => (i) => (i === at ? { chatCount: 200, chatTexts: Array.from({ length: 200 }, () => "NO WAY") } : {}),
+    audio: (at) => (i) => (i === at ? { loudness: -5 } : {}),
+  };
+  for (const [kind, spike] of Object.entries(kinds)) {
+    const first = trace(series(600, spike(300))).candidates;
+    assert.equal(first.length, 1, kind);
+    assert.equal(first[0].signal, kind);
+    const peak = (first[0].peakAt - T0) / 1000;
+
+    const both = (gap) => trace(series(600, (i) => ({ ...spike(300)(i), ...spike(peak + gap)(i) }))).candidates;
+    const at40 = both(40);
+    assert.deepEqual(at40.map((c) => c.peakAt), [first[0].peakAt], `${kind}: 40 s after the peak is inside the cooldown`);
+    const at50 = both(50);
+    assert.deepEqual(at50.map((c) => c.peakAt), [first[0].peakAt, sec(peak + 50)], `${kind}: 50 s after the peak is a moment`);
+    assert.equal(at50[1].signal, kind);
   }
-  return out;
-}
-
-function run(buckets, opts) {
-  const d = createDetector(opts);
-  const spikes = [];
-  for (const b of buckets) {
-    const s = d.push(b);
-    if (s) spikes.push({ ...s, at: b.t });
-  }
-  return spikes;
-}
-
-const inBurst = (from, to) => (t) => (t >= from && t < to ? { mult: 5 } : {});
-
-test("thresholdFor is linear: 3.6 at 30, 2.4 at 70, 1.65 at 95, clamped", () => {
-  assert.equal(thresholdFor(30), 3.6);
-  assert.ok(Math.abs(thresholdFor(70) - 2.4) < 1e-9);
-  assert.ok(Math.abs(thresholdFor(95) - 1.65) < 1e-9);
-  assert.equal(thresholdFor(0), thresholdFor(30));
-  assert.equal(thresholdFor(200), thresholdFor(95));
 });
 
-test("higher sensitivity lowers the threshold, monotonic over 30, 50, 70, 95", () => {
-  const t = [30, 50, 70, 95].map(thresholdFor);
-  for (let i = 1; i < t.length; i++) assert.ok(t[i] < t[i - 1], `${t[i]} < ${t[i - 1]}`);
-});
+test("cooldown, to the second: a 4 s burst starting 40 s after a peak opens its rise at peak + 45, not at + 44", () => {
+  // 200 messages a second at peak + 40 .. + 43. The five-second chat window holds the whole burst at + 44 (its
+  // highest z) and three of its seconds at + 45, so the moment's peak lands on the first second the cooldown lets
+  // a rise open: 45 s after the last peak, to the second.
+  const first = trace(series(600, (i) => (i === 300 ? { chatCount: 200, chatTexts: Array.from({ length: 200 }, () => "NO WAY") } : {}))).candidates;
+  assert.equal(first.length, 1);
+  const peak = (first[0].peakAt - T0) / 1000;
+  const run = (extra) =>
+    trace(
+      series(600, (i) => {
+        if (i === 300) return { chatCount: 200, chatTexts: Array.from({ length: 200 }, () => "NO WAY") };
+        return burst(peak + 40, 4, 200)(i);
+      }),
+      extra,
+    ).candidates.map((c) => c.peakAt);
 
-test("30 minutes of ordinary chat gives no spike", () => {
-  assert.deepEqual(run(makeStream({ seconds: 1800 }), {}), []);
-  assert.deepEqual(run(makeStream({ seconds: 1800, seed: 7 }), {}), []);
-});
-
-test("a 20 s burst at 5x gives exactly one spike, peaking inside the burst", () => {
-  const spikes = run(makeStream({ seconds: 600, shape: inBurst(300, 320) }), {});
-  assert.equal(spikes.length, 1);
-  const s = spikes[0];
-  assert.ok(s.peakAt >= 300 && s.peakAt < 320, `peakAt ${s.peakAt}`);
-  assert.equal(s.reason, "chat");
-  assert.ok(s.score >= 60 && s.score <= 100, `score ${s.score}`);
-  assert.ok(s.chatZ >= 2.4, `chatZ ${s.chatZ}`);
-  assert.equal(s.audioZ !== null && s.audioZ < 3.5, true);
-});
-
-test("a second burst 40 s after the first ends gives nothing (cooldown)", () => {
-  const shape = (t) => (t >= 300 && t < 320) || (t >= 360 && t < 380) ? { mult: 5 } : {};
-  const spikes = run(makeStream({ seconds: 600, shape }), {});
-  assert.equal(spikes.length, 1);
-  assert.ok(spikes[0].peakAt < 320);
-});
-
-test("a burst after the cooldown fires again", () => {
-  const shape = (t) => (t >= 300 && t < 320) || (t >= 500 && t < 520) ? { mult: 5 } : {};
-  const spikes = run(makeStream({ seconds: 700, shape }), {});
-  assert.equal(spikes.length, 2);
-  assert.ok(spikes[1].peakAt >= 500 && spikes[1].peakAt < 520);
-});
-
-test("nothing during warmupSec, even for a huge burst", () => {
-  const stream = makeStream({ seconds: 300, shape: inBurst(20, 50) });
-  const d = createDetector();
-  for (const b of stream.filter((x) => x.t < 60)) assert.equal(d.push(b), null);
-  // a custom warmup is honoured too
-  const spikes = run(makeStream({ seconds: 600, shape: inBurst(100, 120) }), { warmupSec: 200 });
-  assert.deepEqual(spikes, []);
-});
-
-test("a loud audio bucket alone gives reason audio, only at sensitivity 70 or more", () => {
-  const shape = (t) => (t === 300 ? { lufsAdd: 12 } : {});
-  const stream = makeStream({ seconds: 600, shape });
-  for (const sensitivity of [70, 95]) {
-    const spikes = run(stream, { sensitivity });
-    assert.equal(spikes.length, 1, `sensitivity ${sensitivity}`);
-    assert.equal(spikes[0].reason, "audio");
-    assert.equal(spikes[0].peakAt, 300);
-    assert.ok(spikes[0].audioZ >= 3.5);
-  }
-  for (const sensitivity of [30, 50, 69]) {
-    assert.deepEqual(run(stream, { sensitivity }), [], `sensitivity ${sensitivity}`);
-  }
-  assert.equal(run(stream, {}).length, 1); // default 70
-});
-
-test("loud audio with a chat burst in the same buckets is reason both", () => {
-  const shape = (t) => (t >= 300 && t < 320 ? { mult: 5, lufsAdd: 12 } : {});
-  const spikes = run(makeStream({ seconds: 600, shape }), { sensitivity: 50 });
-  assert.equal(spikes.length, 1);
-  assert.equal(spikes[0].reason, "both");
-});
-
-test("dead chat (under 0.5 chatters a bucket) switches chat spikes off", () => {
-  const dead = makeStream({ seconds: 600, shape: (t) => (t >= 300 && t < 320 ? { dead: false, mult: 5 } : { dead: true }) });
-  // the burst buckets are real chat, but the baseline over the last 5 min was dead
-  assert.deepEqual(run(dead.map((b) => ({ ...b, lufs: null })), {}), []);
-  // audio still works on a dead chat
-  const loud = dead.map((b) => (b.t === 400 ? { ...b, lufs: -18 } : { ...b, lufs: -30 }));
-  const spikes = run(loud, {});
-  assert.equal(spikes.length, 1);
-  assert.equal(spikes[0].reason, "audio");
-});
-
-test("buckets with no loudness never produce an audio spike or NaN", () => {
-  const stream = makeStream({ seconds: 600, shape: (t) => ({ noAudio: true, ...(t >= 300 && t < 320 ? { mult: 5 } : {}) }) });
-  const spikes = run(stream, {});
-  assert.equal(spikes.length, 1);
-  assert.equal(spikes[0].audioZ, null);
-  assert.ok(Number.isFinite(spikes[0].chatZ));
-});
-
-test("a repeated or older bucket is ignored", () => {
-  const stream = makeStream({ seconds: 600, shape: inBurst(300, 320) });
-  const d = createDetector();
-  let n = 0;
-  for (const b of stream) {
-    if (d.push(b)) n++;
-    assert.equal(d.push(b), null); // same bucket again
-  }
-  assert.equal(n, 1);
+  assert.deepEqual(run({}), [first[0].peakAt, sec(peak + 45)], "production: 45 s");
+  // controls: the same series with the cooldown one second short or long moves the peak, so the test sees it
+  assert.deepEqual(run({ cooldownSec: 44 }), [first[0].peakAt, sec(peak + 44)], "44 s would peak at + 44");
+  assert.deepEqual(run({ cooldownSec: 46 }), [first[0].peakAt, sec(peak + 46)], "46 s would peak at + 46");
 });

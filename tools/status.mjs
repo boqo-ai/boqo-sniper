@@ -3,10 +3,11 @@
 //
 //   status.mjs <channel>
 //
-// One JSON line: the session's status.json plus its folder, or
-// {"state": "no-session"} when the channel was never watched.
+// One JSON line: the session's status.json plus its folder, and `clipped` and `clips`, the moments it ran through
+// the Clips path and the clips they made (lib/session.mjs readTally); or {"state": "no-session"} when the channel
+// was never watched.
 
-import { currentSession, readStatus } from "../lib/session.mjs";
+import { currentSession, readStatus, readTally } from "../lib/session.mjs";
 
 function fail(message) {
   console.log(JSON.stringify({ error: message }));
@@ -22,7 +23,7 @@ async function main() {
     return;
   }
   const status = await readStatus(session);
-  console.log(JSON.stringify({ ...(status ?? { state: "waiting" }), session }));
+  console.log(JSON.stringify({ ...(status ?? { state: "waiting" }), session, ...(await readTally(session)) }));
 }
 
 main().catch((err) => fail(err.message));

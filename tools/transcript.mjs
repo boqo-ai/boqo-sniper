@@ -15,11 +15,18 @@
 //   {"s":<its first word's start>,"e":<its last word's end>,"match":"<those
 //   words as written>","score":<0..1>}; exit 1 with
 //   {"error":"phrase not found near <sec>"} when nothing scores 0.6.
-//   Give exactly one of --out, --around and --find.
+//   --segments <out> --source manual|auto|whisper [--pause-split <sec>] instead
+//   writes the sentence segments of the words, the shape selection snaps edges
+//   to ([{"start","end","text","speaker":null}], engine/segments.mjs), and
+//   prints {"out":"<path>","segments":N,"words":N}. --source is how the words
+//   were made; only `auto` splits on a pause (--pause-split, default 0.6 s: on
+//   real json3 auto words a split needs 1.6 s start to start, see PAUSE_SPLIT_SEC).
+//   Give exactly one of --out, --around, --find and --segments.
 // Exit 1 with {"error":"..."} on failure.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { heatOf } from '../engine/fetch.mjs';
+import { segmentsFromWords } from '../engine/segments.mjs';
 import { findPhrase, transcriptMarkdown, wordsAround } from '../engine/words.mjs';
 
 const fail = (msg) => {
@@ -51,10 +58,13 @@ const FLAGS = {
   '--find': 'find',
   '--near': 'near',
   '--span': 'span',
+  '--segments': 'segments',
+  '--source': 'source',
+  '--pause-split': 'pauseSplit',
 };
 const flagOf = (k) => Object.keys(FLAGS).find((f) => FLAGS[f] === k);
 // the flags each mode takes besides --words and its own
-const MODE_FLAGS = { out: ['heat', 'lineSec', 'chunkSec'], around: ['span'], find: ['near', 'span'] };
+const MODE_FLAGS = { out: ['heat', 'lineSec', 'chunkSec'], around: ['span'], find: ['near', 'span'], segments: ['source', 'pauseSplit'] };
 
 function main(argv) {
   const opt = {};
@@ -71,10 +81,10 @@ function main(argv) {
     fail(`${flags.slice(0, -1).join(', ')} and ${flags.at(-1)} are mutually exclusive: give only one`);
   }
   if (modes.length === 0) {
-    fail(opt.near !== undefined ? '--near needs --find' : 'give one of --out, --around or --find');
+    fail(opt.near !== undefined ? '--near needs --find' : 'give one of --out, --around, --find or --segments');
   }
   const mode = modes[0];
-  for (const k of ['heat', 'lineSec', 'chunkSec', 'near', 'span']) {
+  for (const k of ['heat', 'lineSec', 'chunkSec', 'near', 'span', 'source', 'pauseSplit']) {
     if (opt[k] === undefined || MODE_FLAGS[mode].includes(k)) continue;
     const owners = Object.keys(MODE_FLAGS).filter((m) => MODE_FLAGS[m].includes(k));
     fail(`${flagOf(k)} goes with ${owners.map(flagOf).join(' or ')}, not ${flagOf(mode)}`);
@@ -99,6 +109,10 @@ function main(argv) {
   const span = seconds(opt.span, '--span');
   const lineSec = seconds(opt.lineSec, '--line-sec');
   const chunkSec = seconds(opt.chunkSec, '--chunk-sec');
+  const pauseSplit = seconds(opt.pauseSplit, '--pause-split');
+  if (mode === 'segments' && !['manual', 'auto', 'whisper'].includes(opt.source)) {
+    fail('--segments needs --source manual, auto or whisper');
+  }
 
   const words = readJson(opt.words, 'words file');
   if (!Array.isArray(words)) fail('the words file must hold an array of words [{"w","s","e"}]');
@@ -117,6 +131,14 @@ function main(argv) {
     const hit = findPhrase(words, opt.find, near, span);
     if (!hit) fail(`phrase not found near ${near}`);
     process.stdout.write(JSON.stringify(hit) + '\n');
+    return;
+  }
+
+  if (mode === 'segments') {
+    const segments = segmentsFromWords(words, { source: opt.source, pauseSplitSec: pauseSplit });
+    const out = resolve(opt.segments);
+    writeFileSync(out, JSON.stringify(segments));
+    process.stdout.write(JSON.stringify({ out, segments: segments.length, words: words.length }) + '\n');
     return;
   }
 

@@ -1,0 +1,25 @@
+{
+ "scores": [
+  { "z": 2.4, "threshold": 2.4 },
+  { "z": 6, "threshold": 2.4 },
+  { "z": 4.2, "threshold": 2.4 },
+  { "z": 3.6, "threshold": 3.6 },
+  { "z": 9, "threshold": 3.6 },
+  { "z": 1.65, "threshold": 1.65 },
+  { "z": 4.125, "threshold": 1.65 },
+  { "z": 2.39, "threshold": 2.4 },
+  { "z": 60, "threshold": 2.4 },
+  { "z": -50, "threshold": 2.4 },
+  { "z": 0, "threshold": 2.4 },
+  { "z": 3.3, "threshold": 2.4 },
+  { "z": 5.1, "threshold": 2.4 }
+ ],
+ "sigmas": [
+  { "score": 60, "threshold": 2.4 },
+  { "score": 80, "threshold": 2.4 },
+  { "score": 100, "threshold": 2.4 },
+  { "score": 50, "threshold": 2.4 },
+  { "score": 95, "threshold": 3.6 },
+  { "score": 80, "threshold": 1.65 }
+ ]
+}

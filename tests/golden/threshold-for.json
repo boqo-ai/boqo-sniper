@@ -1,0 +1,50 @@
+[
+  {
+    "sensitivity": 30,
+    "threshold": 3.6
+  },
+  {
+    "sensitivity": 70,
+    "threshold": 2.4
+  },
+  {
+    "sensitivity": 95,
+    "threshold": 1.65
+  },
+  {
+    "sensitivity": 0,
+    "threshold": 3.6
+  },
+  {
+    "sensitivity": 29,
+    "threshold": 3.6
+  },
+  {
+    "sensitivity": 50,
+    "threshold": 3
+  },
+  {
+    "sensitivity": 69,
+    "threshold": 2.4299999999999997
+  },
+  {
+    "sensitivity": 71,
+    "threshold": 2.37
+  },
+  {
+    "sensitivity": 94,
+    "threshold": 1.6799999999999997
+  },
+  {
+    "sensitivity": 96,
+    "threshold": 1.65
+  },
+  {
+    "sensitivity": 200,
+    "threshold": 1.65
+  },
+  {
+    "sensitivity": 62.5,
+    "threshold": 2.625
+  }
+]

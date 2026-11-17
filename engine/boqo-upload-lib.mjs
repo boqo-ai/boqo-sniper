@@ -1,5 +1,6 @@
-// (copied from boqo-ai/boqount, MIT; one change: `probe` reads any container, and names one boqo does not take
-// as a reason instead of failing, so the skill can read a local file's length through it)
+// (copied from boqo-ai/boqount, MIT; changes: `probe` reads any container, and names one boqo does not take
+// as a reason instead of failing, so the skill can read a local file's length through it; `probe-audio` and a
+// `put` that takes a transcribe upload's reply (`upload_id`, no `projectId`) serve boqo's `transcribe` tool)
 // The mechanical half of publishing through boqo's MCP: probe a video, build the caption-safe upload file
 // name, and PUT the parts a `create_upload` reply asks for. The CLI is tools/boqo-upload.mjs; the tests are
 // tests/boqo-upload.test.mjs.
@@ -10,6 +11,7 @@
 // characters, with `-` and `_` read as spaces.
 import { open } from "node:fs/promises";
 import { extname } from "node:path";
+import { captionFor, tagsOf } from "./boqo/post-caption.mjs";
 
 export const PART_BYTES = 33554432;
 export const MAX_BYTES = 2147483648;
@@ -51,6 +53,26 @@ export function contentTypeOf(path) {
   if (!type) throw new Error(`unsupported container: ${extname(path) || "(no extension)"}`);
   return type;
 }
+
+// What boqo's `create_upload` kind `transcribe` takes. Its length reader refuses MPEG audio (mp3), raw ADTS (aac) and
+// anything with video (measured by boqo's own tests, not here), so the list is the containers it measures.
+const AUDIO_CONTENT_TYPES = {
+  ".m4a": "audio/mp4",
+  ".webm": "audio/webm",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".flac": "audio/flac",
+  ".wav": "audio/wav",
+};
+
+export function audioContentTypeOf(path) {
+  const type = AUDIO_CONTENT_TYPES[extname(path).toLowerCase()];
+  if (!type) throw new Error(`boqo transcribes m4a, webm, ogg, opus, flac or wav audio, not ${extname(path) || "(no extension)"}`);
+  return type;
+}
+
+/** boqo's `transcribe` price (packages/billing/src/transcribe.ts at the pin of the tool): 1 credit for each started 10 minutes, at least 1. */
+export const transcribeCredits = (durationSec) => Math.max(1, Math.ceil(durationSec / 600));
 
 function fpsOf(rate) {
   const [n, d] = String(rate ?? "").split("/").map(Number);
@@ -97,7 +119,8 @@ export function probeVerdict(ffprobe, sizeBytes) {
 
 /** The parts of a `create_upload` reply, checked: not expired, contiguous from 0, and covering the whole file. */
 export function partsFromReply(reply, sizeBytes, now) {
-  if (!reply || typeof reply.projectId !== "string" || !reply.projectId) throw new Error("not a create_upload reply: no projectId");
+  const named = (k) => typeof reply?.[k] === "string" && reply[k] !== "";
+  if (!reply || named("projectId") === named("upload_id")) throw new Error("not a create_upload reply: it needs exactly one of projectId and upload_id");
   if (!Array.isArray(reply.parts)) throw new Error("not a create_upload reply: no parts");
   const expires = Date.parse(reply.expiresAt);
   if (!Number.isFinite(expires)) throw new Error("create_upload reply has no usable expiresAt");
@@ -161,6 +184,23 @@ export async function run(argv, deps) {
     if (command === "name") {
       return { code: 0, line: JSON.stringify({ filename: captionFilename(args.join(" ")) }) };
     }
+    if (command === "caption") {
+      // The post's words for each platform, the way hosted writes them from a clip's title and hook (engine/boqo/post-caption.mjs).
+      const t = flag(args, "--title");
+      const h = flag(t.rest, "--hook");
+      const g = flag(h.rest, "--tags");
+      if (g.rest.length > 0 || typeof t.value !== "string") return fail("usage: caption --title <title> [--hook <hook>] [--tags a,b]");
+      const clip = { title: t.value, hook: h.value ?? null };
+      const tags = tagsOf(g.value);
+      return {
+        code: 0,
+        line: JSON.stringify({
+          tiktok: captionFor("tiktok", clip, tags),
+          instagram: captionFor("instagram", clip, tags),
+          youtube: captionFor("youtube", clip, tags),
+        }),
+      };
+    }
     if (command === "probe") {
       const file = args[0];
       if (!file) return fail("usage: probe <file>");
@@ -180,6 +220,20 @@ export async function run(argv, deps) {
       }
       return { code: 0, line: JSON.stringify({ file, sizeBytes, contentType, ...verdict }) };
     }
+    if (command === "probe-audio") {
+      const file = args[0];
+      if (!file) return fail("usage: probe-audio <file>");
+      const contentType = audioContentTypeOf(file);
+      const sizeBytes = (await deps.stat(file)).size;
+      const res = await deps.exec("ffprobe", ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file]);
+      const ffprobe = JSON.parse(typeof res === "string" ? res : res.stdout);
+      const streams = ffprobe?.streams ?? [];
+      if (streams.some((s) => s.codec_type === "video")) throw new Error("the file has a video stream: boqo's transcribe takes audio only");
+      if (!streams.some((s) => s.codec_type === "audio")) throw new Error("the file has no audio stream");
+      const durationSec = Number(ffprobe?.format?.duration);
+      if (!Number.isFinite(durationSec) || durationSec <= 0) throw new Error("the file has no length ffprobe can read");
+      return { code: 0, line: JSON.stringify({ file, sizeBytes, contentType, durationSec, minutes: Math.ceil(durationSec / 60), credits: transcribeCredits(durationSec) }) };
+    }
     if (command === "put") {
       const { value: replyPath, rest } = flag(args, "--reply");
       const file = rest[0];
@@ -193,10 +247,11 @@ export async function run(argv, deps) {
       }
       const parts = partsFromReply(reply, sizeBytes, deps.now());
       const out = await putParts(file, parts, { fetch: deps.fetch, sleep: deps.sleep });
-      if (out.ok) return { code: 0, line: JSON.stringify({ ok: true, projectId: reply.projectId, parts: parts.length, bytes: out.bytes }) };
-      return { code: 1, line: JSON.stringify({ ok: false, projectId: reply.projectId, partNumber: out.partNumber, status: out.status }) };
+      const id = typeof reply.projectId === "string" ? { projectId: reply.projectId } : { upload_id: reply.upload_id };
+      if (out.ok) return { code: 0, line: JSON.stringify({ ok: true, ...id, parts: parts.length, bytes: out.bytes }) };
+      return { code: 1, line: JSON.stringify({ ok: false, ...id, partNumber: out.partNumber, status: out.status }) };
     }
-    return fail("usage: probe <file> | name <text…> | put <file> --reply <reply.json>");
+    return fail("usage: probe <file> | probe-audio <file> | name <text…> | caption --title <title> [--hook <hook>] [--tags a,b] | put <file> --reply <reply.json>");
   } catch (e) {
     return fail(e?.message ?? e);
   }

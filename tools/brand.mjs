@@ -3,7 +3,8 @@
 //                      show [name]                       (no name: the default kit)
 //                      save <brand.json> [--logo <file-or-url>]
 //                      default <name>
-// Brand kits live in $BOQO_HOME/brands/<name>/ (BOQO_HOME defaults to ~/.boqo).
+// Brand kits live in $BOQO_HOME/brands/<name>/ (BOQO_HOME defaults to ~/.boqo), as v2 (boqo's template shape).
+// `show` of a v1 kit prints it converted, with `migratedFrom: 1` and `notes`, and leaves the file; `save` writes v2.
 // Prints one JSON line (exit 0), or {"error":"..."} (exit 1).
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

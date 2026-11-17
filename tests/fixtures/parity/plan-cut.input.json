@@ -1,0 +1,72 @@
+{
+ "segmentSec": 6,
+ "starts": [
+  1800000000,
+  1800000006,
+  1800000012,
+  1800000018,
+  1800000024,
+  1800000030,
+  1800000036,
+  1800000042,
+  1800000048,
+  1800000054,
+  1800000060,
+  1800000066,
+  1800000072,
+  1800000078,
+  1800000084,
+  1800000090,
+  1800000096,
+  1800000102,
+  1800000108,
+  1800000114
+ ],
+ "cases": [
+  {
+   "peakAtMs": 1800000090000,
+   "windowSec": 60,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000040000,
+   "windowSec": 300,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000090500,
+   "windowSec": 60,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000005000,
+   "windowSec": 300,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000600000,
+   "windowSec": 60,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1799999400000,
+   "windowSec": 60,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000110000,
+   "windowSec": 300,
+   "postRollSec": 0
+  },
+  {
+   "peakAtMs": 1800000060000,
+   "windowSec": 0,
+   "postRollSec": 30
+  },
+  {
+   "peakAtMs": 1800000052000,
+   "windowSec": 12,
+   "postRollSec": 6
+  }
+ ]
+}

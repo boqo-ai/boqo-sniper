@@ -18,3 +18,8 @@ test('every file ENGINE.json lists exists', () => {
   assert.ok(Array.isArray(engine.files) && engine.files.length > 0);
   for (const rel of engine.files) assert.ok(existsSync(join(root, rel)), `missing ${rel}`);
 });
+
+test('package.json dependencies are the engine\'s, as ENGINE.json records them', () => {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  assert.deepEqual(pkg.dependencies, engine.deps);
+});

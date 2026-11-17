@@ -30,9 +30,14 @@ test("parseIrc: PING carries its argument", () => {
   assert.deepEqual(parseIrc("PING :tmi.twitch.tv"), { kind: "ping", arg: "tmi.twitch.tv" });
 });
 
+test("parseIrc: the JOIN echo and the end of NAMES (366) confirm the join, channel lowercased", () => {
+  assert.deepEqual(parseIrc(":justinfan123!justinfan123@justinfan123.tmi.twitch.tv JOIN #ZackRawrr"), { kind: "joined", channel: "zackrawrr" });
+  assert.deepEqual(parseIrc(":justinfan123.tmi.twitch.tv 366 justinfan123 #c :End of /NAMES list\r\n"), { kind: "joined", channel: "c" });
+});
+
 test("parseIrc: everything else is other", () => {
   assert.deepEqual(parseIrc(":tmi.twitch.tv 001 justinfan12345 :Welcome, GLHF!"), { kind: "other" });
-  assert.deepEqual(parseIrc(":x!x@x.tmi.twitch.tv JOIN #c"), { kind: "other" });
+  assert.deepEqual(parseIrc(":justinfan123.tmi.twitch.tv 353 justinfan123 = #c :justinfan123"), { kind: "other" });
   assert.deepEqual(parseIrc(""), { kind: "other" });
 });
 
@@ -245,4 +250,26 @@ test("connectChat: a message after close() never reaches onMsg", () => {
   chat.close();
   f.sockets[0].recv(`${PLAIN}\r\n`);
   assert.equal(got.length, 0);
+});
+
+test("connectChat: the chat is open from the join's confirmation until the socket is lost, and says each change once", () => {
+  const f = makeFakes();
+  const states = [];
+  const chat = connectChat("Chan", () => {}, { ...f.opts, onState: (s) => states.push(s) });
+  assert.equal(chat.state(), "connecting");
+  const ws = f.sockets[0];
+  ws.open();
+  assert.equal(chat.state(), "connecting", "a socket that opened has not joined yet");
+  ws.recv(":justinfan1!justinfan1@justinfan1.tmi.twitch.tv JOIN #other\r\n");
+  assert.equal(chat.state(), "connecting", "another channel's join is not ours");
+  ws.recv(":justinfan1!justinfan1@justinfan1.tmi.twitch.tv JOIN #chan\r\n:justinfan1.tmi.twitch.tv 366 justinfan1 #chan :End of /NAMES list\r\n");
+  assert.equal(chat.state(), "open");
+  ws.drop();
+  assert.equal(chat.state(), "connecting");
+  f.fire();
+  f.sockets[1].open();
+  f.sockets[1].recv(":justinfan1.tmi.twitch.tv 366 justinfan1 #chan :End of /NAMES list\r\n");
+  assert.equal(chat.state(), "open");
+  assert.deepEqual(states, ["open", "connecting", "open"]);
+  chat.close();
 });

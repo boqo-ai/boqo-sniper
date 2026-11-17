@@ -108,7 +108,7 @@ test("watcherPid: a dead pid and a final status are not a watcher; a live pid wi
 
 test("sweepChannel: dead sessions are cleaned, old moments and empty sessions go, a live one is left alone", async () => {
   await withHome(async (home) => {
-    const root = path.join(home, "boqo-sniper", "watch", "sweepy");
+    const root = path.join(home, "boqo-sniper", "watch", "twitch-sweepy");
     const recent = stamp(new Date(Date.now() - 3600 * 1000));
     const child = await fakeWatcher(path.join(home, "bin"));
     try {
@@ -131,9 +131,9 @@ test("sweepChannel: dead sessions are cleaned, old moments and empty sessions go
 
 test("a new watcher sweeps what a hard-killed one left, and stop.mjs does the same for a dead pid", { timeout: 60000 }, async () => {
   await withHome(async (home) => {
-    const root = path.join(home, "boqo-sniper", "watch", "sweepy");
+    const root = path.join(home, "boqo-sniper", "watch", "twitch-sweepy");
     const old = await leftover(root, "20200101-000000", { pid: deadPid(), moments: ["20200101-000500"] });
-    const otherChannel = await leftover(path.join(home, "boqo-sniper", "watch", "elsewhere"), "20200101-000000", {
+    const otherChannel = await leftover(path.join(home, "boqo-sniper", "watch", "twitch-elsewhere"), "20200101-000000", {
       pid: deadPid(),
       moments: [stamp(new Date())],
     });
@@ -226,7 +226,7 @@ test("stop.mjs never signals a pid that is not a watcher; it cleans up as for a 
   await withHome(async (home) => {
     const o = await otherProcess();
     try {
-      const dir = await leftover(path.join(home, "boqo-sniper", "watch", "reused"), "20200101-000000", { pid: o.pid });
+      const dir = await leftover(path.join(home, "boqo-sniper", "watch", "twitch-reused"), "20200101-000000", { pid: o.pid });
       const s = spawnSync(process.execPath, [STOP, "reused"], { env: { ...process.env, BOQO_HOME: home }, encoding: "utf8" });
       assert.deepEqual(JSON.parse(s.stdout), { stopped: false, reason: "not-running" });
       assert.ok(pidAlive(o.pid), "the other program still runs");
@@ -244,7 +244,7 @@ test("stop.mjs waits long enough for a watcher in a 45 s live check, then kills 
     const w = await fakeWatcher(path.join(home, "bin"), { ignoreTerm: true });
     const exited = new Promise((r) => w.once("exit", r));
     try {
-      const dir = await leftover(path.join(home, "boqo-sniper", "watch", "stubborn"), "20200101-000000", { pid: w.pid });
+      const dir = await leftover(path.join(home, "boqo-sniper", "watch", "twitch-stubborn"), "20200101-000000", { pid: w.pid });
       const s = spawnSync(process.execPath, [STOP, "stubborn"], {
         env: { ...process.env, BOQO_HOME: home, BOQO_SNIPER_STOP_WAIT_MS: "1000" },
         encoding: "utf8",
@@ -284,6 +284,17 @@ test("sweepAll sweeps every channel's dead sessions and leaves a live watcher's 
   await withHome(async () => assert.deepEqual(await sweepAll(), [], "no watch folder yet"));
 });
 
+test("sweepAll reaches a Kick channel's folder (hyphens and underscores in the slug) as well as a Twitch one", async () => {
+  await withHome(async (home) => {
+    const watch = path.join(home, "boqo-sniper", "watch");
+    const kick = await leftover(path.join(watch, "kick-x-q_c"), "20200101-000000", { pid: deadPid() });
+    const twitch = await leftover(path.join(watch, "twitch-delta"), "20200101-000000", { pid: deadPid() });
+    await fs.mkdir(path.join(watch, "kick-bad.name"));
+    assert.deepEqual((await sweepAll()).sort(), [kick, twitch].sort());
+    assert.equal(await exists(path.join(watch, "kick-bad.name")), true, "a folder that is no channel's is left alone");
+  });
+});
+
 test("processCommandLine: only a clean 'no such process' is a dead pid; any other failure is unknown", async () => {
   const posix = (r) => processCommandLine(4242, { platform: "linux", exec: async () => ({ spawnError: false, killed: false, code: 0, stdout: "", stderr: "", ...r }) });
   assert.equal(await posix({ stdout: "node /x/tools/watch.mjs chan\n" }), "node /x/tools/watch.mjs chan");
@@ -317,7 +328,7 @@ test("watcherPid: a lookup that cannot tell leaves a live watcher alone, so no s
   await withHome(async (home) => {
     const child = await fakeWatcher(path.join(home, "bin"));
     try {
-      const root = path.join(home, "boqo-sniper", "watch", "busy");
+      const root = path.join(home, "boqo-sniper", "watch", "twitch-busy");
       const dir = await leftover(root, "20200101-000000", { pid: child.pid });
       const unknown = async () => null;
       assert.equal(await watcherPid(dir, { lookup: unknown }), child.pid);
@@ -332,7 +343,7 @@ test("watcherPid: a lookup that cannot tell leaves a live watcher alone, so no s
 
 test("the sweep leaves a session younger than 2 minutes, and an ended one its chat may not have read yet", async () => {
   await withHome(async (home) => {
-    const root = path.join(home, "boqo-sniper", "watch", "racy");
+    const root = path.join(home, "boqo-sniper", "watch", "twitch-racy");
     const now = Date.parse("2026-11-16T12:00:00Z");
     const ago = (sec) => new Date(now - sec * 1000);
     // just created by a watcher starting on another channel: no pid, no status yet

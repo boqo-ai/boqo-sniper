@@ -1,36 +1,60 @@
 #!/usr/bin/env node
-// The live watcher: record a Twitch stream into a 12-minute ring buffer, read
-// its chat, measure its loudness, and cut a moment folder on every spike.
+// The live watcher: record a Twitch or Kick stream into a 6-minute ring buffer, read
+// its chat, measure its loudness, and cut a moment folder on every moment the
+// hosted detector finds (lib/boqo/moments.mjs, fed 1 s ticks by lib/ticks.mjs).
 //
 //   watch.mjs <channel> [--sensitivity 70] [--replay <dir-of-ts> --chat <chat.jsonl>]
+//   watch.mjs <channel> --clip-now      ask the running watcher for a hand-made moment, now (score 100, as hosted)
+//
+// The session's settings are config.json's (lib/settings.mjs: sensitivity, autoClip, autoClipMinScore, windowSec,
+// prompt, visionPerHour); the watcher writes them to the session's settings.json. windowSec sets the cut (the peak
+// is windowSec - 30 s in) and the buffer (windowSec + 60 s); --sensitivity overrides the file.
+//
+// <channel>: a Twitch login, twitch.tv/<login>, kick.com/<slug> or kick:<slug>
+// (boqo's parser, lib/boqo/stream.mjs; a bare name is Twitch).
 //
 // Runs in the foreground; the agent starts it in the background and reads
-// what it writes: $BOQO_HOME/boqo-sniper/watch/<channel>/<YYYYMMDD-HHMMSS>/
-//   buf/seg_<UTC stamp>.ts   10 s segments, the newest 720 s
+// what it writes: $BOQO_HOME/boqo-sniper/watch/<platform>-<slug>/<YYYYMMDD-HHMMSS>/
+//   buf/seg_<counter>.ts     6 s segments, the newest 360 s (a 300 s window and 60 s); capture-<n>.csv is a capture's segment list
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
-//   status.json  watch.pid   `stop` is written by stop.mjs
+//   status.json  settings.json  watch.pid   `stop` is written by stop.mjs, `clipnow` by --clip-now
 //
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
-// offline), or {"error": "..."} and exit 1. Stderr is for humans. A run that
+// offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} or {"error": "kick lookup timed out"} and exit 2 when
+// Kick's channel API answers anything but 200, or not within 15 s (its chat cannot start; Kick sits behind Cloudflare). Stderr is for humans. A run that
 // fails after its session folder exists also leaves status.json at
 // {"state": "failed", "error": "..."}, so `next` and `status` can say why.
 //
-// Timeline: wall-clock epoch seconds, for chat, buckets, peakAt and every
-// segment. A segment's start is read from its own name (ffmpeg's strftime
-// segment names, run with TZ=UTC0 so they are UTC); the file's mtime overrules
-// a name more than a minute away from it, which is what a build that ignores
-// TZ would produce.
+// Timeline: wall-clock epoch seconds, for chat, loudness, peakAt and every
+// segment (the detector's ticks are the same clock in milliseconds). The
+// segments are named by a counter (seg_000042.ts, continued across capture
+// restarts so no name is ever reused: a name from the clock is, when a stalled
+// stream catches up in a burst, and the newer segment overwrites the older). A
+// segment's start comes from the capture's segment list (ffmpeg's csv: name,
+// stream start, stream end, written as each segment closes) and the capture's
+// clock anchor (lib/buffer.mjs createCaptureClock): the first row's read time
+// less its end, lowered whenever a later row says the stream was nearer live.
 //
-// Replay (tests, CI): --replay reads pre-made .ts segments in order, 10 s
-// apart, or as far apart as their names say when every one is named like a
-// buffer segment (seg_<UTC stamp>.ts), so a test can leave a hole; and
+// The detector, as hosted's session runs it: a new one for each capture
+// phase; every complete second, the raw chat messages that arrived in it, its
+// loudest momentary reading (the capture's ebur128 line), and whether the chat
+// socket was open for all of it. A second it was not counts no chat and stays
+// out of the chat baseline.
+//
+// Replay (tests, CI): --replay reads pre-made .ts segments in order, 6 s
+// apart, or as far apart as their names say when every one is named by its
+// start (seg_<UTC stamp>.ts, the form v0.1 wrote), so a test can leave a hole;
+// each is copied into the buffer under the next counter name. And
 // --chat lines {"t": <seconds offset>, "user", "text", "emotes"} on a simulated
-// clock that jumps instead of waiting (BOQO_SNIPER_REPLAY_SPEED=<n> makes it
-// n simulated seconds per real second). When the segments end, offline polling
-// is stubbed: every poll says offline.
+// clock that jumps a second at a time instead of waiting
+// (BOQO_SNIPER_REPLAY_SPEED=<n> makes it n simulated seconds per real second).
+// A chat line {"t", "chatState": "open" | "connecting"} is the socket opening or
+// dropping at t; a replay's chat starts open. Each segment's loudness is read
+// from the segment itself (measureMomentary), at its start plus the reading's t.
+// When the segments end, offline polling is stubbed: every poll says offline.
 //
 // Knobs, for tests: BOQO_SNIPER_POLL_MS (offline poll interval, default
-// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default 720),
+// 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default windowSec + 60),
 // BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
 // BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_MAX_QUEUE and BOQO_SNIPER_MIN_FREE_MB (when a
 // moment is skipped), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
@@ -48,36 +72,53 @@ import { spawn } from "node:child_process";
 import { toolEnv } from "../engine/env.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDetector } from "../lib/detector.mjs";
-import { connectChat } from "../lib/twitch-chat.mjs";
+import { createMomentDetector } from "../lib/boqo/moments.mjs";
+import { signalLine } from "../lib/boqo/signal-line.mjs";
+import { createTickFeed } from "../lib/ticks.mjs";
+import { KICK_LOOKUP_TIMEOUT_MS, KickLookupTimeout, KickRefused, startChat } from "../lib/chat.mjs";
+import { streamChannelLabel, streamUrl } from "../lib/boqo/stream.mjs";
 import {
   cleanupSession,
   countUnclaimed,
   currentSession,
   freeBytes,
   newSession,
+  readStatus,
+  writeSessionSettings,
   stamp,
   sweepAll,
   watcherPid,
   writeJsonAtomic,
+  resolveChannel,
 } from "../lib/session.mjs";
 import {
-  HORIZON_SEC,
   POST_ROLL_SEC,
+  PRUNE_MARGIN_SEC,
   SEGMENT_SEC,
-  chatWindowEnd,
   concatArgs,
   MAX_QUEUE,
+  MAX_LISTED,
   MIN_FREE_BYTES,
   concatList,
+  createCaptureClock,
   parseSegmentName,
+  parseSegmentNumber,
   planCut,
   skipCut,
   pruneBefore,
-  segmentName,
+  segmentFileName,
 } from "../lib/buffer.mjs";
-import { measureLoudness } from "../lib/loudness.mjs";
-import { captureCommand as sourceCommand, chooseCapture, readConfig, stallSecFor } from "../lib/capture.mjs";
+import { resolveSettings, isAutoMoment } from "../lib/settings.mjs";
+import { lineReader, measureMomentary, parseLoudnessLine } from "../lib/loudness.mjs";
+import {
+  captureCommand as sourceCommand,
+  captureFfmpegArgs,
+  chooseCapture,
+  isSegmentOpening,
+  readConfig,
+  readSegmentRows,
+  stallSecFor,
+} from "../lib/capture.mjs";
 
 export const MAX_OFFLINE_POLLS = 10;
 /** Captures in a row that made nothing while the channel said live: the watcher fails with the capture's last words. */
@@ -85,9 +126,9 @@ export const MAX_FAILED_CAPTURES = 10;
 /** A source still running this long after SIGTERM gets SIGKILL. */
 const KILL_GRACE_MS = 5000;
 
-function fail(message) {
+function fail(message, code = 1) {
   console.log(JSON.stringify({ error: message }));
-  process.exit(1);
+  process.exit(code);
 }
 
 /** The session this process owns (its watch.pid is ours), once it has one. */
@@ -99,12 +140,13 @@ let capture = null;
  * Fail a run whose session exists: status.json says failed and why, the
  * buffer and the pid file go, then {"error"} and exit 1.
  */
-async function failSession(message) {
+async function failSession(message, code = 1) {
   if (owned) {
     const now = new Date().toISOString();
     try {
       await writeJsonAtomic(path.join(owned.dir, "status.json"), {
         state: "failed",
+        platform: owned.platform,
         channel: owned.channel,
         since: now,
         segments: 0,
@@ -117,7 +159,7 @@ async function failSession(message) {
     } catch {}
     await cleanupSession(owned.dir).catch(() => {});
   }
-  fail(message);
+  fail(message, code);
 }
 
 // A bug must not leave a "live" status nobody updates: say failed and why, and exit 1.
@@ -134,7 +176,7 @@ process.on("uncaughtException", crash);
 process.on("unhandledRejection", crash);
 
 export function parseArgs(argv) {
-  const o = { channel: null, sensitivity: 70, replay: null, chat: null };
+  const o = { channel: null, sensitivity: null, replay: null, chat: null, clipNow: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--sensitivity") {
@@ -142,6 +184,8 @@ export function parseArgs(argv) {
       const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isFinite(n)) throw new Error(`bad --sensitivity: ${raw}`);
       o.sensitivity = n;
+    } else if (a === "--clip-now") {
+      o.clipNow = true;
     } else if (a === "--replay") {
       o.replay = argv[++i];
       if (!o.replay) throw new Error("--replay needs a folder");
@@ -156,8 +200,9 @@ export function parseArgs(argv) {
       throw new Error(`unexpected argument: ${a}`);
     }
   }
-  if (!o.channel) throw new Error("usage: watch.mjs <channel> [--sensitivity 70] [--replay <dir> --chat <file>]");
+  if (!o.channel) throw new Error("usage: watch.mjs <channel> [--sensitivity 70] [--replay <dir> --chat <file>] | --clip-now");
   if (o.chat && !o.replay) throw new Error("--chat only goes with --replay");
+  if (o.clipNow && (o.replay || o.sensitivity !== null)) throw new Error("--clip-now goes with the channel alone");
   return o;
 }
 
@@ -247,8 +292,8 @@ async function unlinkRetry(file) {
 }
 
 /** The channel's current session is still being watched by a live process. */
-async function runningWatcher(channel) {
-  const dir = await currentSession(channel);
+async function runningWatcher(target) {
+  const dir = await currentSession(target);
   if (!dir) return null;
   const pid = await watcherPid(dir);
   return pid === null ? null : { dir, pid };
@@ -258,24 +303,15 @@ async function runningWatcher(channel) {
 
 /**
  * yt-dlp, or streamlink when config.json opts in (lib/capture.mjs). Both write
- * the stream to stdout; ffmpeg copies it into 10 s segments named by the UTC
+ * the stream to stdout; ffmpeg copies it into 6 s segments named by the UTC
  * second they open. BOQO_SNIPER_SOURCE (a JSON argv) stands in for them in tests.
  */
-function captureCommand(tool, channel) {
+function captureCommand(tool, target) {
   if (tool === "test-source") {
     const [cmd, ...args] = JSON.parse(process.env.BOQO_SNIPER_SOURCE);
     return { cmd, args };
   }
-  return sourceCommand(tool, channel);
-}
-
-function segmenterArgs() {
-  return [
-    "-hide_banner", "-loglevel", "warning",
-    "-i", "pipe:0",
-    "-c", "copy", "-f", "segment", "-segment_time", String(SEGMENT_SEC), "-reset_timestamps", "1",
-    "-strftime", "1", "seg_%Y%m%d%H%M%S.ts",
-  ];
+  return sourceCommand(tool, target);
 }
 
 /**
@@ -352,9 +388,12 @@ function signalTree(child) {
   });
 }
 
-/** Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline. */
-function startCapture(tool, channel, bufDir) {
-  const { cmd, args } = captureCommand(tool, channel);
+/**
+ * Start source | ffmpeg in `bufDir`. `closed` resolves when both are gone; `kill()` ends the pipeline.
+ * `onLoudness(momentary)` gets each of the ffmpeg's ebur128 lines (one per 100 ms) as it arrives.
+ */
+function startCapture(tool, target, bufDir, onLoudness, { startNumber, listFile }) {
+  const { cmd, args } = captureCommand(tool, target);
   const tail = [];
   const note = (who) => (d) => {
     tail.push(`${who}: ${String(d).trim()}`);
@@ -366,14 +405,23 @@ function startCapture(tool, channel, bufDir) {
     windowsHide: true,
     detached: process.platform !== "win32",
   });
-  const ff = spawn("ffmpeg", segmenterArgs(), {
+  const ff = spawn("ffmpeg", captureFfmpegArgs({ startNumber, listFile }), {
     cwd: bufDir,
     stdio: ["pipe", "ignore", "pipe"],
-    env: { ...toolEnv(), TZ: "UTC0" },
+    env: toolEnv(),
     windowsHide: true,
   });
   src.stderr.on("data", note(cmd));
-  ff.stderr.on("data", note("ffmpeg"));
+  const noteFfmpeg = note("ffmpeg");
+  // a loudness line is a reading and a segment-opening line is routine: neither reaches the tail the failure message quotes
+  ff.stderr.on(
+    "data",
+    lineReader((line) => {
+      const parsed = parseLoudnessLine(line);
+      if (parsed) onLoudness(parsed.momentary);
+      else if (line.trim() !== "" && !isSegmentOpening(line)) noteFfmpeg(line);
+    }),
+  );
   ff.stdin.on("error", () => {});
   src.stdout.on("error", () => {});
   src.stdout.pipe(ff.stdin);
@@ -408,17 +456,17 @@ function startCapture(tool, channel, bufDir) {
   };
 }
 
-async function isLive(tool, channel) {
+async function isLive(tool, target) {
   // tests: BOQO_SNIPER_TEST_LIVE=1 makes the test source's channel say live
   if (tool === "test-source") return process.env.BOQO_SNIPER_TEST_LIVE === "1";
   if (await hasTool("yt-dlp")) {
-    const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", `https://www.twitch.tv/${channel}`], {
+    const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", streamUrl(target)], {
       timeoutMs: 45000,
     });
     return r.code === 0 && r.stdout.trim().split(/\s+/).pop() === "True";
   }
   if (tool === "streamlink") {
-    const r = await runOnce("streamlink", ["--json", `twitch.tv/${channel}`], { timeoutMs: 45000 });
+    const r = await runOnce("streamlink", ["--json", streamUrl(target)], { timeoutMs: 45000 });
     try {
       return Object.keys(JSON.parse(r.stdout).streams ?? {}).length > 0;
     } catch {
@@ -426,6 +474,29 @@ async function isLive(tool, channel) {
     }
   }
   return false;
+}
+
+// ---- clip now -------------------------------------------------------------
+
+/**
+ * `--clip-now`: not a watcher. It asks the running one for a hand-made moment by writing `clipnow` into the
+ * session (the watcher reads it every pass, as it reads `stop`), and prints one JSON line.
+ */
+async function clipNowRequest(target, label) {
+  const dir = await currentSession(target);
+  const pid = dir ? await watcherPid(dir) : null;
+  if (!dir || pid === null) fail(`no watcher is running for ${label}`);
+  const status = await readStatus(dir);
+  // The answers that mean nothing will be cut, said here and not only on the watcher's stderr:
+  // a cut needs a picture in the buffer, and the disk floor applies to a hand-made moment too.
+  const refuse = (reason, extra = {}) => {
+    console.log(JSON.stringify({ clipNow: false, reason, session: dir, state: status?.state ?? "waiting", ...extra }));
+  };
+  if (!status || !(status.segments > 0)) return refuse("buffer empty");
+  if (status.state !== "live") return refuse(`stream ${status.state}`);
+  if (status.lowDisk) return refuse("disk", { lowDisk: status.lowDisk });
+  await fs.writeFile(path.join(dir, "clipnow"), String(Date.now()));
+  console.log(JSON.stringify({ clipNow: true, session: dir, state: status.state }));
 }
 
 // ---- the watcher ----------------------------------------------------------
@@ -437,21 +508,36 @@ async function main() {
   } catch (err) {
     fail(err.message);
   }
-  const channel = args.channel.toLowerCase();
+  let target;
+  try {
+    target = resolveChannel(args.channel);
+  } catch (err) {
+    fail(err.message);
+  }
+  const { platform, channel } = target;
+  const label = streamChannelLabel(target);
+  if (args.clipNow) return clipNowRequest(target, label);
   const replay = args.replay !== null;
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
-  const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", HORIZON_SEC);
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
   const maxQueue = envNumber("BOQO_SNIPER_MAX_QUEUE", MAX_QUEUE);
   const minFreeBytes = envNumber("BOQO_SNIPER_MIN_FREE_MB", MIN_FREE_BYTES / 1e6) * 1e6;
+
+  const { config, warning } = await readConfig();
+  if (warning) console.error(warning);
+  let settings;
+  try {
+    settings = resolveSettings(config, { sensitivity: args.sensitivity });
+  } catch (err) {
+    fail(err.message);
+  }
+  const horizonSec = envNumber("BOQO_SNIPER_HORIZON_SEC", settings.windowSec + PRUNE_MARGIN_SEC);
 
   let tool = null;
   if (!(await hasTool("ffmpeg", "-version"))) fail("ffmpeg is not on PATH");
   if (!replay) {
     if (process.env.BOQO_SNIPER_SOURCE) tool = "test-source";
     else {
-      const { config, warning } = await readConfig();
-      if (warning) console.error(warning);
       const wantsStreamlink = config.capture === "streamlink";
       try {
         tool = chooseCapture(config, {
@@ -468,11 +554,11 @@ async function main() {
 
   let running = null;
   try {
-    running = await runningWatcher(channel);
+    running = await runningWatcher(target);
   } catch (err) {
     fail(err.message);
   }
-  if (running) fail(`already watching ${channel} (pid ${running.pid}, ${running.dir})`);
+  if (running) fail(`already watching ${label} (pid ${running.pid}, ${running.dir})`);
 
   // A watcher that was hard-killed leaves its buffer, pid and "live" status
   // behind, on this channel or any other.
@@ -481,16 +567,17 @@ async function main() {
   } catch (err) {
     console.error(`sweep of old sessions failed: ${err.message}`);
   }
-  const dir = await newSession(channel, new Date());
+  const dir = await newSession(target, new Date());
   const bufDir = path.join(dir, "buf");
   const momentsDir = path.join(dir, "moments");
   const stopFile = path.join(dir, "stop");
   try {
     await fs.writeFile(path.join(dir, "watch.pid"), String(process.pid), { flag: "wx" });
   } catch (err) {
-    fail(err.code === "EEXIST" ? `already watching ${channel} (${dir})` : err.message);
+    fail(err.code === "EEXIST" ? `already watching ${label} (${dir})` : err.message);
   }
-  owned = { dir, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
+  await writeSessionSettings(dir, settings);
+  owned = { dir, platform, channel, moments: 0, skipped: { queue: 0, disk: 0 } };
   // tests: BOQO_SNIPER_TEST_CRASH=throw|reject crashes the run 300 ms after its session exists
   const testCrash = process.env.BOQO_SNIPER_TEST_CRASH;
   if (testCrash === "throw" || testCrash === "reject") {
@@ -532,22 +619,27 @@ async function main() {
     clock = liveClock();
   }
 
-  const detector = createDetector({ sensitivity: args.sensitivity });
-  const segs = []; // { n, t0, name, done, cap }
+  let feed = null; // this capture phase's detector and its 1 s ticks (lib/ticks.mjs)
+  let chatState = replay ? "open" : "connecting"; // the chat socket's, as the client last said
+  const segs = []; // { n, t0, s, name, done, cap }
   let captureNo = 0; // which capture a segment came from: a cut never joins two
-  const known = new Set();
+  const known = new Set(); // every segment name this session has used (they are never reused)
   let nextN = 0;
+  let nextSegNo = 0; // the counter in the next capture's first file name; only ever goes up
+  // the running (or last) capture's segment list: its file, how far it is read, the clock that stamps its rows
+  let list = null; // { file, offset, clock, cap }
   let totalSegments = 0;
   const chatLog = []; // { t, user, text, emotes }
-  const pending = []; // spikes waiting for their post-roll
+  const pending = []; // moments waiting for their post-roll
   let lastDoneEnd = -Infinity;
   let moments = 0;
+  let dropped = 0; // listed moments deleted to keep the newest MAX_LISTED
+  let lowDisk = null; // set with every status write
   const skipped = owned.skipped; // moments not cut: { queue, disk }
   let state = "waiting";
   let since = iso(clock.now());
   let stopRequested = false;
   let lastCaptureTail = "";
-  let warnedTz = false;
   let failMessage = null;
 
   const setState = (s) => {
@@ -557,8 +649,15 @@ async function main() {
     }
   };
 
+  /** `{freeBytes, minFreeBytes}` while the disk is under the floor (lib/buffer.mjs MIN_FREE_BYTES), else null. */
+  async function diskLow() {
+    const free = await freeBytes(dir);
+    return free !== null && free < minFreeBytes ? { freeBytes: free, minFreeBytes } : null;
+  }
+
   async function writeStatus() {
     if (crashed) return; // the crash handler's "failed" is the last word
+    lowDisk = await diskLow();
     const now = clock.now();
     let recent = 0;
     for (let i = chatLog.length - 1; i >= 0 && chatLog[i].t >= now - 30; i--) recent++;
@@ -566,6 +665,7 @@ async function main() {
       path.join(dir, "status.json"),
       {
         state,
+        platform,
         channel,
         since,
         segments: segs.length,
@@ -573,6 +673,8 @@ async function main() {
         skipped,
         chatPerSec: Math.round((recent / 30) * 10) / 10,
         updatedAt: iso(now),
+        ...(dropped > 0 ? { dropped } : {}),
+        ...(lowDisk ? { lowDisk } : {}),
         ...(state === "failed" ? { error: failMessage } : {}),
       },
       { quiet: true },
@@ -608,72 +710,115 @@ async function main() {
 
   // ---- finding and finishing segments ----
 
+  /** Stamp every segment of `list`'s capture from its clock: an epoch's anchor may have moved down. */
+  function restamp(capture, clockOf) {
+    for (const seg of segs) if (seg.capture === capture && seg.s !== undefined) seg.t0 = clockOf.t0(seg.s, seg.epoch);
+    lastDoneEnd = segs.reduce((m, s2) => (s2.done ? Math.max(m, s2.t0 + SEGMENT_SEC) : m), -Infinity);
+  }
+
+  /** The rows the capture's segment list gained: each is a closed segment, kept under its own name, read once. */
   async function scanBuffer() {
-    let names;
-    try {
-      names = await fs.readdir(bufDir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (known.has(name)) continue;
-      let t0 = parseSegmentName(name);
-      if (t0 === null) continue;
-      if (!replay) {
-        try {
-          const mtime = (await fs.stat(path.join(bufDir, name))).mtimeMs / 1000;
-          if (Math.abs(mtime - t0) > 60) {
-            if (!warnedTz) console.error("segment names are not in UTC here; reading start times from file times");
-            warnedTz = true;
-            t0 = Math.floor(mtime);
-          }
-        } catch {
-          continue;
-        }
+    if (!list) return;
+    const { rows, offset } = await readSegmentRows(bufDir, list.file, list.offset);
+    list.offset = offset;
+    if (rows.length === 0) return;
+    const seenAt = clock.now();
+    for (const row of rows) {
+      if (known.has(row.name)) continue;
+      const r = list.clock.observe(row, seenAt);
+      known.add(row.name);
+      // `cap` is what a cut never joins across: the capture, and within it the epoch (a hole in the content)
+      const seg = { n: nextN++, t0: 0, s: row.start, name: row.name, done: true, capture: list.cap, epoch: r.epoch, cap: `${list.cap}.${r.epoch}` };
+      if (r.splitBack && list.last) {
+        list.last.epoch = r.epoch;
+        list.last.cap = seg.cap;
       }
-      known.add(name);
-      segs.push({ n: nextN++, t0, name, done: false, cap: captureNo });
+      if (r.splitBack) console.error(`a hole of about ${Math.round(r.gapSec)} s in the stream at ${row.name}: segments from here are placed after it`);
+      segs.push(seg);
+      list.last = seg;
       totalSegments++;
     }
+    restamp(list.cap, list.clock);
     segs.sort((a, b) => a.t0 - b.t0);
   }
 
-  function chatWindow(from, to) {
-    const users = new Set();
-    let count = 0;
-    for (const c of chatLog) {
-      if (c.t >= to) break;
-      if (c.t < from) continue;
-      count++;
-      users.add(c.user);
+  /**
+   * Before a capture: continue the counter past every file the buffer holds (so the new capture cannot open a name an
+   * earlier one used), and remove what the last capture left unlisted, a segment it was writing when it was killed.
+   */
+  async function prepareCapture() {
+    let names = [];
+    try {
+      names = await fs.readdir(bufDir);
+    } catch {}
+    for (const name of names) {
+      const n = parseSegmentNumber(name);
+      if (n !== null) {
+        nextSegNo = Math.max(nextSegNo, n + 1);
+        if (!known.has(name)) await unlinkRetry(path.join(bufDir, name));
+      } else if (/^capture-\d+\.csv$/.test(name)) await unlinkRetry(path.join(bufDir, name));
     }
-    return { count, chatters: users.size };
   }
 
-  async function finishSegment(seg, next) {
-    const lufs = await measureLoudness(seg.name, { cwd: bufDir });
-    const { count, chatters } = chatWindow(seg.t0, chatWindowEnd(seg, next));
+  // ---- the detector ----
+
+  /** A new detector and tick feed for a capture phase, as hosted builds one per phase. */
+  function startFeed() {
+    feed = createTickFeed({
+      detector: createMomentDetector({ windowSec: settings.windowSec, sensitivity: settings.sensitivity }),
+      nowMs: clock.now() * 1000,
+      chatOpen: chatState === "open",
+    });
+  }
+
+  /** Feed every complete second since the last drain; each candidate waits for its post-roll. */
+  function drainFeed() {
+    if (!feed) return;
+    for (const c of feed.drain(clock.now() * 1000)) {
+      pending.push({
+        peakAt: c.peakAt / 1000,
+        score: c.score,
+        signal: c.signal,
+        title: c.title,
+        signalLine: signalLine(c.detail, c.signal),
+        detail: c.detail,
+      });
+    }
+  }
+
+  function onChat(m) {
+    const t = clock.now();
+    chatLog.push({ t, user: m.user, text: m.text, emotes: m.emotes });
+    feed?.chat(t * 1000, m.text);
+  }
+
+  function onChatState(state, t = clock.now()) {
+    chatState = state;
+    feed?.chatState(state, t * 1000);
+  }
+
+  function finishSegment(seg) {
     seg.done = true;
     lastDoneEnd = Math.max(lastDoneEnd, seg.t0 + SEGMENT_SEC);
-    const spike = detector.push({ t: seg.t0 + SEGMENT_SEC / 2, chat: count, chatters, lufs });
-    if (spike) pending.push(spike);
   }
 
   async function cut(spike) {
-    // ~140 MB a moment: never more than maxQueue waiting, never under minFreeBytes free.
-    const unclaimed = await countUnclaimed(momentsDir);
+    // About 260 MB a moment at 1080p60 (lib/buffer.mjs MIN_FREE_BYTES): never more than maxQueue waiting for the
+    // agent, never under minFreeBytes free. A moment below the bar is no queue, and a hand-made one skips the queue.
+    const goes = isAutoMoment(spike, settings);
+    const unclaimed = goes && spike.signal !== "manual" ? await countUnclaimed(momentsDir, (m) => isAutoMoment(m, settings)) : 0;
     const free = await freeBytes(dir);
     const why = skipCut({ unclaimed, freeBytes: free }, { maxQueue, minFreeBytes });
     if (why) {
       skipped[why]++;
       console.error(
         why === "queue"
-          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} to be judged`
+          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} for the agent`
           : `moment at ${iso(spike.peakAt)} skipped: only ${(free / 1e9).toFixed(1)} GB free`,
       );
       return;
     }
-    const plan = planCut(segs.filter((s) => s.done), spike.peakAt);
+    const plan = planCut(segs.filter((s) => s.done), spike.peakAt, settings.windowSec);
     if (!plan) {
       console.error(`spike at ${iso(spike.peakAt)} fell outside the buffer; no cut`);
       return;
@@ -707,9 +852,11 @@ async function main() {
       await writeJsonAtomic(path.join(momentDir, "meta.json"), {
         peakAt: spike.peakAt,
         score: spike.score,
-        reason: spike.reason,
-        chatZ: spike.chatZ,
-        audioZ: spike.audioZ,
+        signal: spike.signal,
+        title: spike.title,
+        signalLine: spike.signalLine,
+        detail: spike.detail,
+        platform,
         channel,
         peakIso: iso(spike.peakAt),
         peakOffsetSec: plan.peakOffsetSec,
@@ -718,12 +865,47 @@ async function main() {
       });
       moments++;
       if (owned) owned.moments = moments;
+      if (!goes) await pruneListed();
     } catch (err) {
       console.error(`cut failed: ${err.message}`);
       await fs.rm(momentDir, { recursive: true, force: true });
     } finally {
       await unlinkRetry(path.join(bufDir, listName));
     }
+  }
+
+  /** Moments below the bar wait for "clip it" and are no queue: keep the newest MAX_LISTED and delete the rest. */
+  async function pruneListed() {
+    const listed = [];
+    let names = [];
+    try {
+      names = (await fs.readdir(momentsDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    } catch {}
+    for (const name of names) {
+      const d = path.join(momentsDir, name);
+      try {
+        await fs.access(path.join(d, ".taken"));
+        continue;
+      } catch {}
+      try {
+        if (!isAutoMoment(JSON.parse(await fs.readFile(path.join(d, "meta.json"), "utf8")), settings)) listed.push(d);
+      } catch {}
+    }
+    for (const d of listed.slice(0, Math.max(0, listed.length - MAX_LISTED))) {
+      console.error(`listed moment ${path.basename(d)} deleted: only the newest ${MAX_LISTED} below the bar are kept`);
+      await fs.rm(d, { recursive: true, force: true });
+      dropped++;
+    }
+  }
+
+  /** `--clip-now` leaves `clipnow` in the session: a hand-made moment at this second (hosted's manualCandidate). */
+  async function takeClipNow() {
+    try {
+      await fs.rm(path.join(dir, "clipnow"));
+    } catch {
+      return;
+    }
+    pending.push({ peakAt: clock.now(), score: 100, signal: "manual", title: "clipped by hand", signalLine: null, detail: null });
   }
 
   async function prune() {
@@ -734,16 +916,17 @@ async function main() {
     for (let i = segs.length - 1; i >= 0; i--) if (gone.has(segs[i].n)) segs.splice(i, 1);
   }
 
-  /** One pass: finish segments, cut what is ready, prune, report. `ended`: nothing more will arrive. */
+  /** One pass: finish segments, feed the detector, cut what is ready, prune, report. `ended`: nothing more will arrive. */
   async function tick(ended) {
     await scanBuffer();
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i];
       if (seg.done) continue;
-      const next = segs[i + 1];
-      if (!next && !ended) break; // the newest one is still being written
-      await finishSegment(seg, next);
+      if (!segs[i + 1] && !ended) break; // the newest one is still being written
+      finishSegment(seg);
     }
+    drainFeed();
+    await takeClipNow();
     const flush = ended || stopRequested;
     for (let i = 0; i < pending.length; ) {
       const spike = pending[i];
@@ -753,7 +936,7 @@ async function main() {
       } else i++;
     }
     await prune();
-    const horizonT = clock.now() - horizonSec - 60;
+    const horizonT = clock.now() - horizonSec - PRUNE_MARGIN_SEC;
     while (chatLog.length && chatLog[0].t < horizonT) chatLog.shift();
     await writeStatus();
   }
@@ -764,7 +947,13 @@ async function main() {
     const before = totalSegments;
     // every segment of the last capture was found by the tick after it ended
     captureNo++;
-    capture = startCapture(tool, channel, bufDir);
+    startFeed();
+    await prepareCapture();
+    list = { file: `capture-${captureNo}.csv`, offset: 0, clock: createCaptureClock(), cap: captureNo };
+    capture = startCapture(tool, target, bufDir, (momentary) => feed?.loudness(clock.now() * 1000, momentary), {
+      startNumber: nextSegNo,
+      listFile: list.file,
+    });
     let over = false;
     capture.closed.then(() => (over = true));
     // A source blocked on a dead connection neither exits nor writes: with no
@@ -791,24 +980,49 @@ async function main() {
   }
 
   async function captureReplay() {
+    startFeed();
     let ci = 0;
+    // every chat line before `before`, stamped with its own time as a live one is with its arrival
     const feedChat = (before) => {
       while (ci < replayChat.length && replayBase + replayChat[ci].t < before) {
         const c = replayChat[ci++];
-        chatLog.push({ t: replayBase + c.t, user: String(c.user), text: String(c.text ?? ""), emotes: Number(c.emotes) || 0 });
+        const t = replayBase + c.t;
+        if (typeof c.chatState === "string") {
+          onChatState(c.chatState, t);
+          continue;
+        }
+        const text = String(c.text ?? "");
+        chatLog.push({ t, user: String(c.user), text, emotes: Number(c.emotes) || 0 });
+        feed?.chat(t * 1000, text);
+      }
+    };
+    // the clock moves a second at a time, and every second the detector is fed, as a live capture's loop does
+    const replayUntil = async (t) => {
+      while (clock.now() < t && !(await checkStop())) {
+        await clock.sleep(Math.min(1, t - clock.now()));
+        feedChat(clock.now());
+        drainFeed();
       }
     };
     for (let i = 0; i < replayFiles.length; i++) {
       const at = replayBase + replayOffsets[i];
-      if (at > clock.now()) await nap(at - clock.now());
+      await replayUntil(at);
       if (await checkStop()) return;
       feedChat(at);
-      await fs.copyFile(path.join(args.replay, replayFiles[i]), path.join(bufDir, segmentName(at)));
+      const name = segmentFileName(nextSegNo++);
+      const seg = path.join(bufDir, name);
+      await fs.copyFile(path.join(args.replay, replayFiles[i]), seg);
+      // a replay has no segment list: the file's offset is its start, and it is whole at once
+      known.add(name);
+      segs.push({ n: nextN++, t0: at, name, done: false, cap: captureNo });
+      totalSegments++;
+      segs.sort((a, b) => a.t0 - b.t0);
+      for (const r of await measureMomentary(seg)) feed.loudness((at + r.t) * 1000, r.momentary);
       await tick(false);
       setState("live");
     }
     const endAt = replayBase + replayOffsets.at(-1) + SEGMENT_SEC;
-    if (endAt > clock.now()) await nap(endAt - clock.now());
+    await replayUntil(endAt);
     feedChat(endAt);
   }
 
@@ -818,7 +1032,29 @@ async function main() {
   if (replay) {
     // chat comes from the file
   } else {
-    chat = connectChat(channel, (m) => chatLog.push({ t: clock.now(), user: m.user, text: m.text, emotes: m.emotes }));
+    // tests: BOQO_SNIPER_TEST_KICK_STATUS=<n> makes Kick's channel API answer with that status
+    const testKick = process.env.BOQO_SNIPER_TEST_KICK_STATUS;
+    // BOQO_SNIPER_TEST_KICK_HANG=1: the channel API never answers; BOQO_SNIPER_KICK_LOOKUP_MS shortens the 15 s wait
+    const fetchImpl = process.env.BOQO_SNIPER_TEST_KICK_HANG === "1"
+      ? () => new Promise(() => {})
+      : testKick
+      ? async () => ({ status: Number(testKick), ok: Number(testKick) === 200, json: async () => ({ chatroom: { id: 1 } }) })
+      : globalThis.fetch;
+    try {
+      chat = await startChat({
+        platform,
+        slug: channel,
+        onMessage: onChat,
+        onOpenChange: (open) => onChatState(open ? "open" : "connecting"),
+        fetch: fetchImpl,
+        lookupTimeoutMs: envNumber("BOQO_SNIPER_KICK_LOOKUP_MS", KICK_LOOKUP_TIMEOUT_MS),
+      });
+    } catch (err) {
+      // Kick answered the channel lookup with something but 200, or not at all in time: no chatroom to join, so no
+      // chat for the whole watch. Say so now, in one line, and stop; the person decides (Kick sits behind Cloudflare).
+      if (err instanceof KickRefused || err instanceof KickLookupTimeout) await failSession(err.message, 2);
+      throw err;
+    }
   }
 
   let exitError = null;
@@ -826,11 +1062,20 @@ async function main() {
   let failedCaptures = 0; // consecutive captures that made no segment
   try {
     await writeStatus();
+    if (lowDisk) {
+      // Said once, here: a start with the disk under the floor looks normal and then cuts nothing (status.lowDisk,
+      // and the end line, carry it too). The floor is checked against the free space at each cut, queued cuts
+      // already out of it: lib/buffer.mjs says how much that is to reach a full queue.
+      console.error(
+        `low disk: ${(lowDisk.freeBytes / 1e9).toFixed(1)} GB free, under the ${(lowDisk.minFreeBytes / 1e9).toFixed(1)} GB floor: no moment will be cut until space is freed`,
+      );
+    }
     while (!(await checkStop())) {
       const before = totalSegments;
       await (replay ? captureReplay() : captureLive());
       if (await checkStop()) break;
       await tick(true); // the capture is over: its last segment is whole now
+      feed = null; // the next capture phase starts a new detector
       if (totalSegments > before) {
         offlinePolls = 0;
         failedCaptures = 0;
@@ -848,7 +1093,7 @@ async function main() {
       while (!live && offlinePolls < MAX_OFFLINE_POLLS) {
         await nap(pollSec);
         if (await checkStop()) break;
-        live = replay ? false : await isLive(tool, channel);
+        live = replay ? false : await isLive(tool, target);
         if (live) offlinePolls = 0;
         else offlinePolls++;
         await writeStatus();
@@ -874,13 +1119,17 @@ async function main() {
   setState(exitError ? "failed" : stopped ? "stopped" : "offline");
   if (!keepBuf) {
     for (const s of segs.splice(0)) await unlinkRetry(path.join(bufDir, s.name));
+    // and what the last capture left: a segment it was writing when it was killed, and its segment list
+    for (const name of await fs.readdir(bufDir).catch(() => [])) {
+      if (parseSegmentNumber(name) !== null || /^capture-\d+\.csv$/.test(name)) await unlinkRetry(path.join(bufDir, name));
+    }
   }
   await writeStatus();
   await fs.rm(path.join(dir, "watch.pid"), { force: true });
   await fs.rm(stopFile, { force: true });
 
   if (exitError) fail(failMessage);
-  process.stdout.write(JSON.stringify({ state, channel, session: dir, moments, offlinePolls }) + "\n", () => process.exit(0));
+  process.stdout.write(JSON.stringify({ state, platform, channel, session: dir, moments, offlinePolls, ...(lowDisk ? { lowDisk } : {}) }) + "\n", () => process.exit(0));
 }
 
 main().catch((err) => failSession(err?.message || String(err)));

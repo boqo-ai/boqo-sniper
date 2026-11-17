@@ -1,7 +1,7 @@
 {
   "name": "boqo-sniper",
-  "version": "0.1.0",
-  "description": "Watch a Twitch stream live on your own PC and clip the moments chat goes wild, with your brand.",
+  "version": "0.2.0",
+  "description": "Watch a Twitch or Kick stream live on your own PC and clip the moments chat goes wild, with your brand.",
   "author": {
     "name": "boqo",
     "url": "https://boqo.ai"
