@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/headline-styles.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/headline-styles.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * The six headline looks (spec §2.1; mockup `CS.HLS`). `plate` with no effects
  * and no entrance IS today's headline — `buildHeadlineAss` given it, or given no

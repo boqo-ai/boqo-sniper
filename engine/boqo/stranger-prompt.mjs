@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/stranger/prompt.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/stranger/prompt.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
                                                
 // Cut: the `@boqo/core` import becomes ./timeline.mjs, the five time maps this file calls (boqo's own code, see its
 // header); the Anthropic SDK import was types only (the content blocks are plain objects, unchanged).

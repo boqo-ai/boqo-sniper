@@ -1,8 +1,9 @@
-// ported from boqo-ai/boqo packages/core/src/clip-target.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// Cut: the import of packages/core/src/constants.ts. The three values clipTargetFor
-// and keepCeilingFor read, at the pin; the scene constants go with the scene path.
+// ported from boqo-ai/boqo packages/core/src/clip-target.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// Cut: the import of packages/core/src/constants.ts. The four values clipTargetFor,
+// keepCeilingFor and keepCapFor read, at the pin; the scene constants go with the scene path.
 const CLIPS_PER_MINUTE = 1.0;
 const MAX_CLIPS_PER_PROJECT = 120;
+const SELECT_KEEP_FLOOR = 3;
 const SELECT_KEEP_HEADROOM = 1.25;
 
 /**
@@ -45,4 +46,16 @@ function applyHeadroom(target        , ceiling        )         {
  */
 export function keepCeilingFor(target        )         {
   return applyHeadroom(target, MAX_CLIPS_PER_PROJECT);
+}
+
+/**
+ * The most clips a project's first selection keeps at `share` of its target
+ * (spec 2026-11-16-select-keep-half). Never more than `keepCeilingFor`
+ * allows, so a share at or above SELECT_KEEP_HEADROOM is that ceiling, and
+ * never under SELECT_KEEP_FLOOR where that ceiling reaches it.
+ */
+export function keepCapFor(target        , share        )         {
+  const ceiling = keepCeilingFor(target);
+  const floor = Math.min(SELECT_KEEP_FLOOR, ceiling);
+  return Math.min(Math.max(Math.round(target * share), floor), ceiling);
 }

@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/panels.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/panels.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { z } from "zod";
 
 /** A region of the source frame as fractions of its width and height. */

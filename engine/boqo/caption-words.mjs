@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/caption-words.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-words.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * How a transcript word becomes a caption word, and which caption words a
  * keyword highlighter marks (stage 8a).
@@ -18,7 +18,7 @@
  * into a client component.
  */
 
-// ported from boqo-ai/boqo packages/core/src/audio-enhance.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/audio-enhance.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut import: `maskWord` (audio-enhance.ts:75-109, with its MASK_CYCLES and LETTER_OR_DIGIT) is copied below
 // verbatim, so `captionDisplayText` draws a censored word as hosted does; the rest of audio-enhance.ts is the B4
 // Audio Enhance schemas this skill does not use. The skill censors nothing today, so `mask` is never set.

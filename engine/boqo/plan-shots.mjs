@@ -1,6 +1,6 @@
-// ported from boqo-ai/boqo apps/worker/src/render/pipeline.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo packages/core/src/editor-sidecar.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/pipeline.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/editor-sidecar.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 //
 // The placement half of boqo's `planShots` (render/pipeline.ts): every shot of a clip placed through crop.mjs's
 // `planLayout`, from the shots engine/shots.mjs found and the faces engine/faces.mjs detected. The detection half

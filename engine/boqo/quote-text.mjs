@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/quote-text.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/quote-text.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 const URL_LIKE = /\b(?:https?:\/\/|www\.)\S+/gi;
 

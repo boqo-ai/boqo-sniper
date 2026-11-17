@@ -8,16 +8,25 @@
 //
 // Production values are constants here: minScore 0, no seed window, sha null,
 // the default replay tunables, the count target one clip a minute and the keep
-// ceiling that is 1.25 times it (both from engine/boqo/clip-target.mjs).
+// cap, half of it (both from engine/boqo/clip-target.mjs; the share is
+// SELECT_KEEP_SHARE below).
 import { SelectionResponse, normaliseAlternatives } from './boqo/selection-schema.mjs';
 import { CLIP_LENGTH_PRESETS, resolveClipLength } from './boqo/selection-presets.mjs';
-import { clipTargetFor, keepCeilingFor } from './boqo/clip-target.mjs';
+import { clipTargetFor, keepCapFor } from './boqo/clip-target.mjs';
 import { snapAndFilter } from './boqo/snap.mjs';
 import { deriveStandaloneTest } from './boqo/standalone.mjs';
 import { DEFAULT_REPLAY_TUNABLES, replayOf } from './boqo/replay.mjs';
 
 /** How many errors are listed before the rest are only counted. */
 export const MAX_ERRORS = 40;
+
+/**
+ * The share of its target a first selection keeps, highest score first: hosted's
+ * SELECT_KEEP_SHARE_DEFAULT (packages/core/src/constants.ts, from 04480cf52), which production
+ * runs. Read by the controller on 2026-11-17: 04480cf52 is in the deployed 475f6fe9c, and
+ * `railway variables --kv -s worker` lists no SELECT_KEEP_SHARE.
+ */
+export const SELECT_KEEP_SHARE = 0.5;
 
 // The skill asks for exactly two (the rubric and the field's description say so). Hosted's schema
 // does not enforce it: `normaliseAlternatives` keeps what is usable. The agent is held to the
@@ -84,7 +93,10 @@ export function checkSelection(raw, { segments, durationSec, heat, length = 'aut
   if (errors.length > 0) return { ok: false, errors: listed(errors) };
 
   const target = clipTargetFor(durationSec);
-  const cap = keepCeilingFor(target);
+  // Hosted's first run (`run.settings === null`): keepCapFor at the share. Its other branch, a
+  // re-analysis capped at the count the person chose, has no equivalent here: no step asks for a
+  // count, and a redo re-checks an edited first selection under this same cap.
+  const cap = keepCapFor(target, SELECT_KEEP_SHARE);
   const band = resolveClipLength(length);
   const candidates = parsed.data.clips.map(candidateOf);
   const { kept, dropped } = snapAndFilter(candidates, segments, {

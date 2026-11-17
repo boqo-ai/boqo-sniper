@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/selection.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/selection.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Types only, as JSDoc, plus the one value the file holds that the skill uses. The
 // SelectionInput, ClipSelector and scene types are not part of the skill: the person's
 // agent is the selector, and select-input.mjs builds the one input it needs.

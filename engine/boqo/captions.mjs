@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/captions.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/captions.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // `@boqo/core` is packages/core/src, whose copies are this directory's. REFERENCE_SIZE is
 // `OUTPUT_SIZES[DEFAULT_ASPECT_RATIO]` in packages/core/src/output-size.ts, the 9:16 entry: the one constant of
 // that module this file reads (the rest is the brand template's ratio, resolved by the caller into `output`).

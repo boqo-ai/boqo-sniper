@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/pause-cuts.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/pause-cuts.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: `import { CUT_REASONS } from "./audio-enhance"` was used only in a return type, which is gone.
 import { capSpans, guardSpans, mergeSpans,          } from "./cut-map.mjs";
 

@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/panels-text.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/panels-text.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut imports: `@boqo/core` and `./headline` become the sibling copies (caption-presets, headline,
 // headline-ass: A12's and A13's modules). `ShotPlan` is a type only (pipeline.ts, engine/boqo/plan-shots.mjs).
 // A11 first copied HEADLINE_POSITION_MIN/MAX, CAPTION_POSITION_MAX as constants and took `scalePreset`,

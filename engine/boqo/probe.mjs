@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo apps/worker/src/panels/probe.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/post/original.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/panels/probe.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/post/original.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 //
 // The select-time probe's pure parts: its limits, `probeTimes`, the ffprobe size read and its rotation. Cut: the
 // rest of the module is the worker's own (`runPanelProbe` and `probeForSelect`: the switch and the owner's email,

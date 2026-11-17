@@ -1,6 +1,6 @@
-// ported from boqo-ai/boqo apps/worker/src/render/compose.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo packages/core/src/brand-backdrop.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/compose.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/brand-backdrop.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 //
 // The skill renders one copy of a clip, with no hook, no boqo lockup, hard cuts and the standard look, so the inputs
 // `buildFilterGraph` and `composeArgs` take for anything else are cut, each to the constant the skill renders with:

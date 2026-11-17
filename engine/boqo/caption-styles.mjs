@@ -1,9 +1,9 @@
-// ported from boqo-ai/boqo packages/core/src/caption-styles.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-styles.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import {
   CAPTION_PRESETS, captionPresetFingerprint,
                                                    
 } from "./caption-presets.mjs";
-// ported from boqo-ai/boqo packages/core/src/illustrated.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/illustrated.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut import: ILLUSTRATED_PREVIEW is `export const ILLUSTRATED_PREVIEW = true;` in packages/core/src/illustrated.ts
 // (the Illustrated look is developer-only at the pin, so `illustrated` stays out of the gallery and of
 // GALLERY_CAPTION_STYLE_KEYS); the rest of that module is the B-roll look this skill does not render.

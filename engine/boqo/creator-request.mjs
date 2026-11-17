@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/creator-request.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/creator-request.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * The creator's own words, quoted into a model's USER message (My projects v2
  * spec §4 Phase 3) -- never into a cached system prompt, where one

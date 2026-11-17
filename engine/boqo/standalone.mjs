@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/standalone.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/standalone.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { z } from "zod";
 // Cut: the import of packages/core/src/viral.ts and the editor-only tail of the module
 // (parseContextLinePlan, ContextLineEditSchema, ContextLineEditError, applyContextLineEdit):

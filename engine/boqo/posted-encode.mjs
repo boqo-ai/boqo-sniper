@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/posted-encode.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/posted-encode.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut import: the `OutputSize` type (@boqo/core), `{ width, height }` in pixels.
                                              
 

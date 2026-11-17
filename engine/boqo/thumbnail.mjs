@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/thumbnail.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/thumbnail.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /** Step 6 of spec §5.4 — one frame out of the finished clip. */
 export function thumbnailArgs(input   
                     

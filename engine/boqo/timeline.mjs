@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo packages/core/src/timeline.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo packages/core/src/cut-map.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/timeline.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/cut-map.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: of timeline.ts, everything the stranger transcript does not read (the teaser schema and its import, the hook
 // ranges and captions, fileToClipSec, fileToSourceSec, clipRangesToFile, clipTimelineFromRow, clipMomentRanges); of
 // cut-map.ts, everything but its two time maps, windowToClipSec and clipToWindowSec (the cut planner, the word and

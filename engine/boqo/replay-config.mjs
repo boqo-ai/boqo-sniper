@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/select/replay-config.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/select/replay-config.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: the environment readers (`replayTunablesFromEnv`, `bridgeMaxSecFromEnv`,
 // `nonNegativeIntegerFromEnv`) and their imports of ../env, ../logger and
 // ../render/config. Hosted production sets none of the variables, so the skill

@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/select/anthropic.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/select/anthropic.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Only the wire schema and what normalises its output are taken from that file (lines 46-201 at the pin:
 // STANDALONE_DESCRIPTIONS, TITLE_ALTERNATIVES_DESCRIPTION, SelectionResponse, TITLE_ALTERNATIVES,
 // clampUtf16, normaliseAlternatives), with the bounds verbatim. The Anthropic call, the retries and the

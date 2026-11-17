@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/headline.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/headline.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut imports: `@boqo/core` becomes the sibling copies (caption-timing, headline, caption-metrics, caption-faces,
 // caption-presets, caption-layout); `./captions` and `./caption-effects` become their copies. Nothing else is cut.
 import { ANIM_MS, HEADLINE_SLIDE_CAP_HEIGHTS, animMs, withinEvent as within } from "./caption-timing.mjs";

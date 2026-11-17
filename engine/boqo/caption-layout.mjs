@@ -1,11 +1,11 @@
-// ported from boqo-ai/boqo packages/core/src/caption-layout.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-layout.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { assFontSize, fontMetrics, measureWidth,                  } from "./caption-metrics.mjs";
 import { scalePreset,                              } from "./caption-presets.mjs";
                                                   
 import { coveringFace } from "./caption-faces.mjs";
 import { buildEmphasisSet, captionDisplayText, isEmphasised } from "./caption-words.mjs";
-// ported from boqo-ai/boqo packages/core/src/caption-edits.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo packages/core/src/illustrated.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-edits.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/illustrated.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut imports, copied below verbatim: `paceTime` (caption-edits.ts:159-169; the rest of that module is the
 // clip editor's stored caption edits, which a skill has none of, so `timeSpans` is never passed) and
 // `isNumberToken` with its NUMBER_WORDS (illustrated.ts:122-148; the rest of that module is the Illustrated

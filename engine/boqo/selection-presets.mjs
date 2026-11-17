@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/selection-presets.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/selection-presets.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: the import of packages/core/src/constants.ts. Auto's four numbers, at the pin.
 const CLIP_TARGET_MIN_SEC = 20;
 const CLIP_TARGET_MAX_SEC = 75;

@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo apps/worker/src/ingest/metadata.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/select/handler.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/ingest/metadata.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/select/handler.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // A partial hand port, not a strip: heatmapOf, descriptionOf and chaptersOf are
 // parseHeatmap, parseDescription and parseChapters; buildSelectionInput is the
 // `input` half of loadSelectionInput. The goldens compare its output with boqo's.

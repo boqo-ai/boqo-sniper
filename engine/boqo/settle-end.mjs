@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/settle-end.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/settle-end.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
                                                  
                                       
 // Cut: boqo's `isStoppedError` (apps/worker/src/stops.ts) reads a worker job's Stop. A skill has no job

@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo apps/worker/src/render/loudness.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo packages/core/src/loudness.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/loudness.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/loudness.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut imports:
 // - `CLIP_LOUDNESS` (@boqo/core, packages/core/src/loudness.ts) is copied below with its comment;
 // - `isStoppedError` (../stops): the skill has no Stop (a person stops a run by ending the process), so every

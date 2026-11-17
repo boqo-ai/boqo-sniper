@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/select/prompt.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/select/prompt.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: the scene path (SCENE_SELECTION_RUBRIC, buildSceneUserMessage and the
 // silence marker), which the skill does not have, and the barrel import of
 // @boqo/core: its values come from the sibling copies.

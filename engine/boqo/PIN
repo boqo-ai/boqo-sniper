@@ -1,2 +1,3 @@
-bcc9d99cc
-2026-11-16
+0fe2ee1c1
+2026-11-17
+Moved from bcc9d99cc for v0.2.1: 04480cf52 (a first selection keeps half its target) ported, daabb9c90 has no skill path; every other ported source is byte-identical at both, and the 81 goldens regenerated unchanged at 0fe2ee1c1 before select-pipeline took keepCapFor.

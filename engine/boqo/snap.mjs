@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/select/snap.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/select/snap.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: the import of packages/core/src/constants.ts. MAX_CLIP_OVERLAP_RATIO, at the pin
 // (a clip overlapping a kept one by more than 25% of the shorter is dropped).
 const MAX_CLIP_OVERLAP_RATIO = 0.25;

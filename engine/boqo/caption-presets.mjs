@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/caption-presets.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-presets.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut import: REFERENCE_WIDTH and REFERENCE_HEIGHT are `export const REFERENCE_WIDTH = 1080;` and
 // `export const REFERENCE_HEIGHT = 1920;` in packages/core/src/constants.ts (the 9:16 reference frame every pixel
 // constant was measured against), a module of product limits this skill has no other use for.

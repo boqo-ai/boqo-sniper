@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/caption-effects.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/caption-effects.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // `@boqo/core` is packages/core/src, whose copies are this directory's.
 import { ANIM_MS, LINE_SLIDE_CAP_HEIGHTS, animMs, withinEvent as within } from "./caption-timing.mjs";
 import { cssToAss, opacityToAssAlpha } from "./caption-presets.mjs";

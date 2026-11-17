@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/cut-window.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/cut-window.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
                                       
 
 /**

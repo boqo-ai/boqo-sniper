@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/publish-posts.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/publish-posts.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // A partial hand port, not a strip: the file is mostly zod schemas and post vocabulary. Kept here are
 // PLATFORM_LIMITS (its `text` and `title` limits; the duration and ratio limits go with the refusals),
 // clampCopy and fallbackCopy, verbatim but for the types. This is the rule hosted's Clips page uses to

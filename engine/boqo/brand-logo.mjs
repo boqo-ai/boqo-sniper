@@ -1,8 +1,8 @@
-// ported from boqo-ai/boqo apps/worker/src/render/brand.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/brand.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
                                             
 // Cut import: LOGO_FADE_SEC is `export const LOGO_FADE_SEC = 0.32;` in apps/worker/src/render/branding.ts (the boqo
 // lockup's own letter-by-letter fade and its timing, which this skill does not draw); only the mark's fade is used here.
-// ported from boqo-ai/boqo apps/worker/src/render/branding.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/branding.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /** The mark's own fade, which runs after the letters in both directions. */
 export const LOGO_FADE_SEC = 0.32;
 

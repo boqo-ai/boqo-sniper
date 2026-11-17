@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/brand-timing.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/brand-timing.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { z } from "zod";
 
 /**

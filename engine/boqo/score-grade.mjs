@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/web/src/components/score-grade.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/web/src/components/score-grade.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: the import of @boqo/core. The one constant it gave, packages/core/src/constants.ts @ bcc9d99cc.
 const DECENT_SCORE_FLOOR = 60;
 

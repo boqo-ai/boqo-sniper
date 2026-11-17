@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/pauses.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/pauses.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { PAUSE_DEFAULTS, planPauseCuts,                                           } from "./pause-cuts.mjs";
 
 // Cut: `import { log, logError } from "../logger"`, the worker's structured logger. The skill has no log

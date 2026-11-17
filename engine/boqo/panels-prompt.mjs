@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo apps/worker/src/panels/prompt.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/panels/decide.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/panels/prompt.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/panels/decide.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { clipToWindowSec } from "./cut-map.mjs";
                                       
 

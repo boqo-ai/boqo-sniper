@@ -19,8 +19,8 @@
 //   writes the sentence segments of the words, the shape selection snaps edges
 //   to ([{"start","end","text","speaker":null}], engine/segments.mjs), and
 //   prints {"out":"<path>","segments":N,"words":N}. --source is how the words
-//   were made; only `auto` splits on a pause (--pause-split, default 0.6 s: on
-//   real json3 auto words a split needs 1.6 s start to start, see PAUSE_SPLIT_SEC).
+//   were made; only `auto` splits on a pause (--pause-split, default 0.8 s from
+//   one word's start to the next's, see PAUSE_SPLIT_SEC).
 //   Give exactly one of --out, --around, --find and --segments.
 // Exit 1 with {"error":"..."} on failure.
 import { readFileSync, writeFileSync } from 'node:fs';

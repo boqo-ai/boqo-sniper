@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/cut-map.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/cut-map.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Only the part the render stage needs is ported (constants, guardSpans, mergeSpans, capSpans, cutsDurationSec,
 // keptSegments, the two time maps windowToClipSec and clipToWindowSec, which the stream panels read needs, and
 // wordsThroughCuts, which moves a clip's caption words onto the cut timeline as captionWordsFor does);

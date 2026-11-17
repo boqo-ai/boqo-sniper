@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/subject-rule.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/subject-rule.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: `eq` (drizzle-orm), `Db` and `streamMoments` (@boqo/db) and the `SubjectRule` type import: the skill has no
 // database. The one fact the query answered, whether this clip was cut from a Stream Sniper moment, is the caller's
 // parameter `fromStreamMoment` (boqo-sniper's clips pass true, boqo-clips' never do), and with no read left the

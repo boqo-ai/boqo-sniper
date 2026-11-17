@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/src/render/extract.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/extract.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * Builds the argv for step 2 of spec §5.4: pull only this clip's bytes out of
  * the source over HTTP range requests, without re-encoding.

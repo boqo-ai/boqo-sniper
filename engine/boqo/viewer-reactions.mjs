@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/viewer-reactions.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/viewer-reactions.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 import { sanitiseQuote } from "./quote-text.mjs";
 
 

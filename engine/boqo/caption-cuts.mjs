@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/caption-cuts.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/caption-cuts.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * The scene cuts `layoutCaptions` breaks caption groups at, derived from a
  * clip's own shot list.

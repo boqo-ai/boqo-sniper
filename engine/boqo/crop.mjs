@@ -1,5 +1,5 @@
-// ported from boqo-ai/boqo apps/worker/src/render/crop.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
-// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/crop.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/src/render/config.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 // Cut: `eyeLineTargetFromEnv`, `faceHeightTargetFromEnv`, `lookingRoomFromEnv`, `maxUpscaleFromEnv`,
 // `motionFloorFromEnv`, `trackDeadzoneFromEnv` and `trackMaxPanFromEnv` (render/config.ts), which read
 // RENDER_EYE_LINE_TARGET, RENDER_FACE_HEIGHT_TARGET, RENDER_LOOKING_ROOM, RENDER_MAX_UPSCALE,

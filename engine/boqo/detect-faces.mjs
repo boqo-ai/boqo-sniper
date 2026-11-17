@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo apps/worker/python/detect_faces.py @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo apps/worker/python/detect_faces.py @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 //
 // A hand port from Python, line for line, with the Python names kept so a drift diff reads across. What changed
 // in the move, and nothing else:

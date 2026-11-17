@@ -1,4 +1,4 @@
-// ported from boqo-ai/boqo packages/core/src/prompt.ts @ bcc9d99cc; keep in step (scripts/boqo-drift.mjs)
+// ported from boqo-ai/boqo packages/core/src/prompt.ts @ 0fe2ee1c1; keep in step (scripts/boqo-drift.mjs)
 /**
  * A creator's prompt (My projects v2 spec §3 I, §4 Phase 3; D4, D5): the few
  * words that tell selection, or a watch's judge, what to look for. One
