@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { sessionFolder, stamp } from "../lib/session.mjs";
+import { pidAlive, sessionFolder, stamp } from "../lib/session.mjs";
 import { segmentName } from "../lib/buffer.mjs";
 import { toolEnv } from "../engine/env.mjs";
 import { EwmaStat } from "../lib/boqo/moments.mjs";
@@ -344,6 +344,66 @@ test("stop.mjs stops a running watcher; a second watcher on the channel is refus
   }
 });
 
+// SKILL.md's "Another agent" start is `nohup node watch.mjs … > <log> 2>&1 &`. Node resets the SIGHUP that nohup ignores to
+// its default (measured 2026-11-17, Node v22.20.0 on Linux: /proc/<pid>/status SigIgn without bit 0 under nohup, and
+// the control below exits on the signal), so the watcher's own listener is all that keeps a hangup from ending it.
+test(
+  "under nohup a hangup does not stop the watcher: it keeps recording until stop.mjs",
+  { timeout: 120000, skip: process.platform === "win32" ? "no nohup; Windows' SIGHUP is the console closing" : false },
+  async () => {
+    const work = await tmp("nohup");
+    const home = path.join(work, "home");
+    try {
+      // the control: under nohup, a Node process with no listener of its own still dies of SIGHUP
+      const control = spawn("nohup", [process.execPath, "-e", "setTimeout(() => {}, 20000)"], { stdio: "ignore" });
+      await new Promise((r) => setTimeout(r, 500));
+      control.kill("SIGHUP");
+      const [code, signal] = await new Promise((r) => control.on("exit", (c, sig) => r([c, sig])));
+      assert.ok(signal === "SIGHUP" || code === 129, `the control should die of the hangup: code ${code}, signal ${signal}`);
+
+      await makeSegments(path.join(work, "segs"), 6);
+      await makeChat(path.join(work, "chat.jsonl"), 60, null);
+      const log = path.join(work, "watch.log");
+      const out = await fs.open(log, "w");
+      const env = { ...process.env, BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "1000", BOQO_SNIPER_REPLAY_SPEED: "1" };
+      const child = spawn("nohup", [process.execPath, WATCH, "hupchan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], {
+        env,
+        stdio: ["ignore", out.fd, out.fd],
+      });
+      const exited = new Promise((r) => child.on("exit", (c, sig) => r({ code: c, signal: sig })));
+      const session = await waitForSession(home, "hupchan");
+      const pid = Number(await fs.readFile(path.join(session, "watch.pid"), "utf8"));
+      assert.equal(pid, child.pid, "nohup ran the watcher in its own process");
+      const readStatusFile = async () => JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+      process.kill(pid, "SIGHUP");
+      await new Promise((r) => setTimeout(r, 2500));
+      assert.ok(pidAlive(pid), "the watcher is still running after the hangup");
+      // and still recording: it writes its status again (each replayed 6 s segment is a write), not as stopped
+      const afterHangup = await readStatusFile();
+      let later = null;
+      for (let i = 0; i < 200 && !later; i++) {
+        const st = await readStatusFile();
+        if (st.updatedAt !== afterHangup.updatedAt || st.segments !== afterHangup.segments) later = st;
+        else await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.ok(later, "a status written after the hangup");
+      assert.notEqual(later.state, "stopped");
+      assert.ok(pidAlive(pid));
+
+      const stopped = await run(STOP, ["hupchan"], env);
+      assert.equal(stopped.json.stopped, true, stopped.stdout);
+      const end = await exited;
+      await out.close();
+      assert.equal(end.code, 0);
+      const text = await fs.readFile(log, "utf8");
+      assert.match(text, /hangup ignored/);
+      assert.equal(JSON.parse(text.trim().split("\n").at(-1)).state, "stopped", "the stop is stop.mjs's, not the hangup's");
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
+  },
+);
+
 test("a capture that stops producing without exiting is killed and the watcher moves on", { timeout: 120000 }, async () => {
   const work = await tmp("stall");
   const home = path.join(work, "home");
@@ -563,7 +623,7 @@ test("a Kick channel whose API answers 403 stops the start: kick refused: 403, e
       BOQO_SNIPER_TEST_KICK_STATUS: "403",
     };
     const r = await run(WATCH, ["kick:x-q_c"], env);
-    await assertFailed(r, await onlySession(home, "kick:x-q_c"), "kick:x-q_c", env, /^kick refused: 403$/, 2);
+    await assertFailed(r, await onlySession(home, "kick:x-q_c"), "kick:x-q_c", env, /^kick refused: 403 \(kick\.com, behind Cloudflare, turned this network away; Kick support is experimental\)$/, 2);
     assert.equal(path.basename(path.dirname(await onlySession(home, "kick:x-q_c"))), "kick-x-q_c");
     await assert.rejects(fs.access(path.join(work, "capture-ran")), "the capture never started");
   } finally {
@@ -571,7 +631,7 @@ test("a Kick channel whose API answers 403 stops the start: kick refused: 403, e
   }
 });
 
-test("a Kick channel API that never answers: kick lookup timed out, exit 2, status failed, no capture", { timeout: 60000 }, async () => {
+test("a Kick channel API that never answers: tried 3 times, then kick lookup timed out, exit 2, status failed, no capture", { timeout: 60000 }, async () => {
   const work = await tmp("kickhang");
   const home = path.join(work, "home");
   try {
@@ -583,8 +643,31 @@ test("a Kick channel API that never answers: kick lookup timed out, exit 2, stat
       BOQO_SNIPER_KICK_LOOKUP_MS: "300",
     };
     const r = await run(WATCH, ["kick:xqc"], env);
-    await assertFailed(r, await onlySession(home, "kick:xqc"), "kick:xqc", env, /^kick lookup timed out$/, 2);
+    await assertFailed(r, await onlySession(home, "kick:xqc"), "kick:xqc", env, /^kick lookup timed out \(3 tries\)$/, 2);
     await assert.rejects(fs.access(path.join(work, "capture-ran")), "the capture never started");
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
+});
+
+test("a Kick capture refused by kick.com (yt-dlp's HTTP Error 403) ends the watch at once, saying so: not offline after 10 silent polls", { timeout: 60000 }, async () => {
+  const work = await tmp("kickcap");
+  const home = path.join(work, "home");
+  try {
+    const env = {
+      BOQO_HOME: home,
+      // what yt-dlp 2026.08.19 prints when kick.com's channel API turns it away (no browser to impersonate, or a refused network)
+      BOQO_SNIPER_SOURCE: JSON.stringify([
+        process.execPath, "-e",
+        'console.error("ERROR: [kick:live] xqc: Unable to download JSON metadata: HTTP Error 403: Forbidden (caused by <HTTPError 403: Forbidden>)"); process.exit(1)',
+      ]),
+      BOQO_SNIPER_TEST_KICK_STATUS: "200", // the watcher's own channel lookup (its chat) was let in
+      BOQO_SNIPER_POLL_MS: "2000", // 10 offline polls would take 20 s
+    };
+    const t0 = Date.now();
+    const r = await run(WATCH, ["kick:xqc"], env);
+    await assertFailed(r, await onlySession(home, "kick:xqc"), "kick:xqc", env, /^kick refused the capture: yt-dlp got HTTP Error 403 from kick\.com/, 2);
+    assert.ok(Date.now() - t0 < 10000, `ended after the first capture, not after the polls: ${Date.now() - t0} ms`);
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
@@ -900,32 +983,102 @@ test("sensitivity from config.json sets the detector's bar: a faint chat rise fi
   }
 });
 
-test("moments below the bar are no queue and only the newest 3 are kept", { timeout: 240000 }, async () => {
-  const work = await tmp("listed-prune");
+test("moments below the bar are no queue, and none is dropped before the agent was told of it: at the cap a new one is not cut", { timeout: 240000 }, async () => {
+  const work = await tmp("listed-cap");
   const home = path.join(work, "home");
   try {
     await makeSegments(path.join(work, "segs"), 200);
     await makeChatBursts(path.join(work, "chat.jsonl"), 1200, [300, 498, 696, 894, 1092]);
     await writeConfig(home, { autoClip: false });
-    // a queue of one would skip every moment after the first if they counted; they do not
-    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MAX_QUEUE: "1" };
+    // a queue of one would skip every moment after the first if they counted; they do not. A cap of 3 below the bar.
+    const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_MAX_QUEUE: "1", BOQO_SNIPER_MAX_LISTED: "3" };
     const r = await run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
     assert.equal(r.code, 0, r.stderr);
     const session = await onlySession(home, "chan");
     const names = (await fs.readdir(path.join(session, "moments"))).sort();
     const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
-    assert.equal(status.moments, 5);
-    assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
-    assert.equal(names.length, 3, `the newest 3 stay, got ${names}`);
-    assert.equal(status.dropped, 2, "status counts the moments it deleted");
+    assert.equal(names.length, 3, `the first 3 stay, none told yet: ${names}`);
+    assert.equal(status.moments, 3);
+    assert.deepEqual(status.skipped, { queue: 2, disk: 0 }, "the 4th and 5th were not cut");
+    assert.equal(status.dropped, undefined, "nothing was dropped");
+    for (const n of names) await fs.access(path.join(session, "moments", n, "video.mp4"));
+    assert.equal(r.stderr.match(/skipped: 3 moments below the bar wait to be told, or were told under 15 minutes ago/g)?.length, 2);
     const list = await run(NEXT, ["chan", "--list"], env);
-    assert.equal(list.json.dropped, 2);
-    assert.equal(list.json.moments.length, 3);
-    assert.match(r.stderr, /listed moment .* deleted: only the newest 3/);
+    assert.deepEqual(list.json.moments.map((m) => m.name), names);
+    assert.equal(list.json.dropped, 0);
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
 });
+
+/** The agent's side of a session: `next --timeout 1` again and again until it says stopped. Every line it printed. */
+async function nextLoop(channel, env) {
+  const lines = [];
+  for (let i = 0; i < 400; i++) {
+    const r = await run(NEXT, [channel, "--timeout", "1"], env);
+    if (r.json && !r.json.timeout) lines.push(r.json);
+    if (r.json?.stopped || r.code !== 0) return lines;
+  }
+  return lines;
+}
+
+for (const blocked of [false, true]) {
+  test(
+    blocked
+      ? "a told moment past its keep that cannot be moved out (a lock) is claimed and its video deleted: the new cut stands, nothing is told twice"
+      : "at the cap, a moment told more than its keep ago makes room for a new one: it leaves moments/ whole, and the new cut stands",
+    { timeout: 240000 },
+    async () => {
+      const work = await tmp(blocked ? "listed-blocked" : "listed-drop");
+      const home = path.join(work, "home");
+      try {
+        await makeSegments(path.join(work, "segs"), 100);
+        await makeChatBursts(path.join(work, "chat.jsonl"), 600, [300, 498]);
+        await writeConfig(home, { autoClip: false });
+        // one moment below the bar held, kept 1 ms after it was told; 25 simulated seconds a real one, so the agent's
+        // loop tells the first moment (about 13 s in) well before the second is cut (about 21 s in)
+        const env = { BOQO_HOME: home, BOQO_SNIPER_POLL_MS: "100", BOQO_SNIPER_REPLAY_SPEED: "25", BOQO_SNIPER_MAX_LISTED: "1", BOQO_SNIPER_LISTED_KEEP_MS: "1" };
+        const watching = run(WATCH, ["chan", "--replay", path.join(work, "segs"), "--chat", path.join(work, "chat.jsonl")], env);
+        const session = await waitForSession(home, "chan");
+        // a file where the trash folder goes: the drop cannot move the folder out, as a Windows lock would stop it
+        if (blocked) await fs.writeFile(path.join(session, "trash"), "in the way");
+        const told = await nextLoop("chan", env);
+        const r = await watching;
+        assert.equal(r.code, 0, r.stderr);
+        const status = JSON.parse(await fs.readFile(path.join(session, "status.json"), "utf8"));
+        assert.equal(status.moments, 2);
+        assert.equal(status.dropped, 1);
+        assert.deepEqual(status.skipped, { queue: 0, disk: 0 });
+        const names = (await fs.readdir(path.join(session, "moments"))).sort();
+        const listedNames = told.filter((j) => j.listed).map((j) => path.basename(j.listed));
+        assert.equal(listedNames.length, 2, `each moment told once: ${JSON.stringify(told)}`);
+        assert.equal(new Set(listedNames).size, 2, "never the same moment twice");
+        assert.deepEqual(told.at(-1), { stopped: "offline" });
+        const [first, second] = listedNames;
+        assert.match(r.stderr, new RegExp(`listed moment ${first} dropped: told 0 minutes ago or more, and 1 moment below the bar is held`));
+        assert.doesNotMatch(r.stderr, /cut failed/);
+        // the new cut stands, whole
+        assert.deepEqual((await fs.readdir(path.join(session, "moments", second))).sort(), [".listed", "chat.json", "meta.json", "video.mp4"]);
+        if (blocked) {
+          assert.deepEqual(names, [first, second]);
+          assert.deepEqual((await fs.readdir(path.join(session, "moments", first))).sort(), [".listed", ".taken", "chat.json", "meta.json"], "claimed, its video gone");
+          assert.match(r.stderr, /could not be moved out/);
+        } else {
+          assert.deepEqual(names, [second], "the dropped one left moments/ whole");
+          await assert.rejects(fs.access(path.join(session, "trash")), "the watcher empties trash/ when it ends");
+        }
+        const list = await run(NEXT, ["chan", "--list"], env);
+        assert.deepEqual(list.json.moments.map((m) => m.name), [second]);
+        assert.equal(list.json.dropped, 1);
+        const gone = await run(NEXT, ["chan", "--take", first], env);
+        assert.equal(gone.code, 1);
+        assert.match(gone.json.error, blocked ? /is not listed/ : /may have been dropped/);
+      } finally {
+        await fs.rm(work, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 test("a disk under the floor at start: one stderr line, lowDisk in status and in the end line, and the status stays accurate", { timeout: 180000 }, async () => {
   const work = await tmp("lowdisk");

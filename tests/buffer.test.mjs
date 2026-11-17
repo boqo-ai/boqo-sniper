@@ -174,7 +174,7 @@ test("segment names are UTC wall-clock, no colons, and round-trip", () => {
 test("skipCut: a full queue or a short disk skips the moment", async () => {
   const { skipCut, MAX_QUEUE, MIN_FREE_BYTES } = await import("../lib/buffer.mjs");
   assert.equal(MAX_QUEUE, 10);
-  assert.equal(MIN_FREE_BYTES, 5e9, "retuned for 300 s cuts: a full house is about 4.1 GB (10 queued, 3 listed, buffer, a cut, working files) and the floor is that plus about 1 GB");
+  assert.equal(MIN_FREE_BYTES, 5e9, "retuned for 300 s cuts, and checked against the free space at each cut");
   assert.equal(skipCut({ unclaimed: 0, freeBytes: 50e9 }), null);
   assert.equal(skipCut({ unclaimed: 9, freeBytes: 5e9 }), null);
   assert.equal(skipCut({ unclaimed: 10, freeBytes: 50e9 }), "queue");
@@ -183,6 +183,30 @@ test("skipCut: a full queue or a short disk skips the moment", async () => {
   assert.equal(skipCut({ unclaimed: 0, freeBytes: null }), null, "free space unknown: cut");
   assert.equal(skipCut({ unclaimed: 2, freeBytes: 50e9 }, { maxQueue: 2 }), "queue");
   assert.equal(skipCut({ unclaimed: 0, freeBytes: 5e9 }, { minFreeBytes: 6e9 }), "disk");
+});
+
+// ---- moments below the bar: what is kept for "clip it" ----
+
+test("planListed: below the bar, an untold moment is never dropped, a told one only 15 minutes after it was told, and only at 10", async () => {
+  const { planListed, MAX_LISTED, LISTED_KEEP_SEC } = await import("../lib/buffer.mjs");
+  assert.equal(MAX_LISTED, 10);
+  assert.equal(LISTED_KEEP_SEC, 900);
+  const now = 1_800_000_000_000;
+  const min = 60_000;
+  const held = (told) => told.map((ago, i) => ({ dir: `m${i}`, toldAt: ago === null ? null : now - ago }));
+  const plan = (h, o = {}) => planListed(h, { nowMs: now, ...o });
+
+  assert.deepEqual(plan([]), { cut: true, drop: [] });
+  assert.deepEqual(plan(held(Array(9).fill(60 * min))), { cut: true, drop: [] }, "under the cap nothing goes, however long ago it was told");
+  assert.deepEqual(plan(held(Array(10).fill(null))), { cut: false, drop: [] }, "at the cap, all untold: the new one is not cut");
+  assert.deepEqual(plan(held(Array(10).fill(15 * min - 1))), { cut: false, drop: [] }, "told, but not 15 minutes ago");
+  const one = held([null, 5 * min, 15 * min, null, 1 * min, null, null, null, null, null]);
+  assert.deepEqual(plan(one), { cut: true, drop: ["m2"] }, "told exactly 15 minutes ago: it makes room");
+  const two = held([20 * min, 30 * min, ...Array(8).fill(null)]);
+  assert.deepEqual(plan(two), { cut: true, drop: ["m1"] }, "of two past their time, the one told longest ago");
+  assert.deepEqual(plan(held([null, 2 * min]), { maxListed: 2, keepSec: 60 }), { cut: true, drop: ["m1"] }, "the cap and the time are parameters");
+  assert.deepEqual(plan(held([5 * min, 5 * min, 5 * min]), { maxListed: 2, keepSec: 60 }), { cut: true, drop: ["m0", "m1"] }, "over the cap (a lower one than the session started with): as many as it takes");
+  assert.deepEqual(plan(held([5 * min, null, null]), { maxListed: 2, keepSec: 60 }), { cut: false, drop: [] }, "and none when that is not enough");
 });
 
 // ---- the buffer's names (a counter) and times (the capture's segment list) ----

@@ -134,9 +134,47 @@ test("countUnclaimed counts only what a predicate on the meta lets through", asy
     await mk("a", { score: 90 });
     await mk("b", { score: 70 });
     await mk("c", { score: 95 }, true);
-    await mk("d", null); // being cut: no meta yet
+    // No meta.json: not a moment. The watcher counts before it makes its own cut and is the only one cutting into its
+    // session, so this is a cut that failed and could not be removed, never one in progress: it holds no slot.
+    await mk("d", null);
     const m = path.join(dir, "moments");
-    assert.equal(await countUnclaimed(m), 3, "no predicate: every unclaimed one");
-    assert.equal(await countUnclaimed(m, (meta) => meta.score >= 80), 2, "a, and d which has no meta yet");
+    assert.equal(await countUnclaimed(m), 2, "no predicate: every unclaimed moment, a and b");
+    assert.equal(await countUnclaimed(m, (meta) => meta.score >= 80), 1, "a alone: d holds no slot");
   });
+});
+
+test("heldListed: the unclaimed moments below the bar, each with when `next` told of it (its .listed), or null", async () => {
+  await withHome(async () => {
+    const { heldListed } = await import("../lib/session.mjs");
+    const dir = await newSession("chan");
+    const mk = async (name, meta, marks = []) => {
+      const d = path.join(dir, "moments", name);
+      await fs.mkdir(d);
+      if (meta) await fs.writeFile(path.join(d, "meta.json"), JSON.stringify(meta));
+      for (const f of marks) await fs.writeFile(path.join(d, f), "");
+      return d;
+    };
+    const told = await mk("20261116-100000", { score: 60 }, [".listed"]);
+    const untold = await mk("20261116-100500", { score: 70 });
+    await mk("20261116-101000", { score: 90 }); // at the bar: the queue's, not held here
+    await mk("20261116-101500", { score: 50 }, [".listed", ".taken"]); // taken: the agent's
+    await mk("20261116-102000", null); // no meta.json
+    const at = new Date("2026-11-16T10:01:00Z");
+    await fs.utimes(path.join(told, ".listed"), at, at);
+    const held = await heldListed(path.join(dir, "moments"), (meta) => meta.score >= 80);
+    assert.deepEqual(held, [
+      { name: "20261116-100000", dir: told, toldAt: at.getTime() },
+      { name: "20261116-100500", dir: untold, toldAt: null },
+    ]);
+    assert.deepEqual(await heldListed(path.join(dir, "nowhere"), () => false), []);
+  });
+});
+
+test("hangupStops: a hangup stops the watcher only when it writes to a terminal (Windows: its console closing)", async () => {
+  const { hangupStops } = await import("../lib/session.mjs");
+  assert.equal(hangupStops({ platform: "linux", stdoutIsTTY: true, stderrIsTTY: true }), true, "in a terminal that closed");
+  assert.equal(hangupStops({ platform: "darwin", stdoutIsTTY: false, stderrIsTTY: true }), true);
+  assert.equal(hangupStops({ platform: "linux", stdoutIsTTY: false, stderrIsTTY: false }), false, "nohup with its output in a file, or an agent's pipes");
+  assert.equal(hangupStops({ platform: "darwin", stdoutIsTTY: undefined, stderrIsTTY: undefined }), false);
+  assert.equal(hangupStops({ platform: "win32", stdoutIsTTY: false, stderrIsTTY: false }), true, "Windows: the console's close event");
 });

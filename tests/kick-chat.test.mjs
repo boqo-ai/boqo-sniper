@@ -114,12 +114,73 @@ test("a channel lookup that never answers rejects startChat with KickLookupTimeo
   };
   const t0 = Date.now();
   await assert.rejects(
-    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch, WebSocket: s.FakeWS, lookupTimeoutMs: 60 }),
+    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch, WebSocket: s.FakeWS, lookupTimeoutMs: 60, startBackoffMs: [] }),
     (err) => err instanceof KickLookupTimeout && err.message === "kick lookup timed out",
   );
   assert.ok(Date.now() - t0 >= 55 && Date.now() - t0 < 1500, `rejected after ${Date.now() - t0} ms`);
   assert.equal(signal.aborted, true, "the request is aborted too");
   assert.equal(s.sockets.length, 0);
+});
+
+test("a temporary answer at the start (429, a 5xx, a network error, a timeout) is tried again after a wait; then the chat opens", async () => {
+  const answers = [
+    () => refused(429),
+    () => refused(503),
+    () => {
+      throw new TypeError("fetch failed");
+    },
+    () => ok(CHANNEL),
+  ];
+  const f = fakeFetch((n) => answers[n - 1]());
+  const s = fakeSockets();
+  const t0 = Date.now();
+  await start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS, startBackoffMs: [30, 30, 30] });
+  assert.equal(f.calls.length, 4, "every temporary answer was tried again");
+  assert.ok(Date.now() - t0 >= 85, `waited between tries: ${Date.now() - t0} ms`);
+  await until(() => s.sockets.length === 1, "the socket");
+
+  // a lookup that timed out once
+  let n = 0;
+  const slowOnce = (url, init) => (++n === 1 ? new Promise(() => {}) : Promise.resolve(ok(CHANNEL)));
+  const s2 = fakeSockets();
+  await start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: slowOnce, WebSocket: s2.FakeWS, lookupTimeoutMs: 40, startBackoffMs: [5] });
+  assert.equal(n, 2);
+  await until(() => s2.sockets.length === 1, "the socket after a timeout");
+});
+
+test("a 5xx or a timeout on every try ends the start with the last answer; the default waits are 2 s and 5 s", async () => {
+  const { KICK_START_BACKOFF_MS } = await import("../lib/chat.mjs");
+  assert.deepEqual(KICK_START_BACKOFF_MS, [2000, 5000], "three tries, about 7 s of waiting");
+  const f = fakeFetch(() => refused(502));
+  await assert.rejects(
+    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: fakeSockets().FakeWS, startBackoffMs: [5, 5] }),
+    (err) => err instanceof KickRefused && err.status === 502 && err.message === "kick refused: 502 (3 tries)",
+  );
+  assert.equal(f.calls.length, 3);
+  let calls = 0;
+  const hang = () => {
+    calls++;
+    return new Promise(() => {});
+  };
+  await assert.rejects(
+    start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: hang, WebSocket: fakeSockets().FakeWS, lookupTimeoutMs: 20, startBackoffMs: [5, 5] }),
+    (err) => err instanceof KickLookupTimeout && err.message === "kick lookup timed out (3 tries)",
+  );
+  assert.equal(calls, 3);
+});
+
+test("a refusal (403, 404) is not tried again: the start ends at once, a 403 saying plainly that kick.com turned this network away", async () => {
+  for (const status of [403, 404]) {
+    const f = fakeFetch(() => refused(status));
+    await assert.rejects(
+      start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: fakeSockets().FakeWS, startBackoffMs: [5, 5] }),
+      (err) => err instanceof KickRefused && err.status === status,
+    );
+    assert.equal(f.calls.length, 1, `${status}: one try`);
+  }
+  const f = fakeFetch(() => refused(403));
+  const err = await start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: fakeSockets().FakeWS }).catch((e) => e);
+  assert.equal(err.message, "kick refused: 403 (kick.com, behind Cloudflare, turned this network away; Kick support is experimental)");
 });
 
 test("the default lookup timeout is hosted's 15 s", async () => {
@@ -202,11 +263,23 @@ test("a network error on the first lookup is not a refusal: startChat resolves a
   });
   const s = fakeSockets();
   const chat = await start({
-    platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS, backoffMs: [5],
+    platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS, backoffMs: [5], startBackoffMs: [5],
   });
   await until(() => s.sockets.length === 1, "the socket after the second lookup");
   assert.equal(f.calls.length, 2);
   chat.close();
+});
+
+test("a network error on every try at the start is not a refusal either: the start goes on and the chat client keeps trying, as hosted's does", async () => {
+  const f = fakeFetch((n) => {
+    if (n <= 4) throw new TypeError("fetch failed");
+    return ok(CHANNEL);
+  });
+  const s = fakeSockets();
+  await start({ platform: "kick", slug: "xqc", onMessage() {}, onOpenChange() {}, fetch: f.fetch, WebSocket: s.FakeWS, backoffMs: [5], startBackoffMs: [5, 5] });
+  assert.ok(f.calls.length >= 3, `the start's three tries, then the chat client's own: ${f.calls.length}`);
+  await until(() => s.sockets.length === 1, "the socket once the network is back");
+  assert.equal(f.calls.length, 5);
 });
 
 test("Twitch: the same onOpenChange, true on the join's confirmation and false on a drop", async () => {

@@ -15,7 +15,7 @@
 //   {"stopped": "failed", "error": "..."} the watcher ended on an error
 //   {"timeout": true, "status": {...}}   nothing came in time
 //   {"moments": [...], "dropped": n}    --list: name, moment, score, band, signalLine, title, peakIso; and how many
-//                                        older ones the watcher deleted to keep the newest 3
+//                                        told ones the watcher dropped to make room (lib/buffer.mjs planListed)
 // Never waits past 540 s: Claude Code caps one shell command at 600 s. The default and the skill's value are 170,
 // since Claude Code moves a command to the background after about 180 s whatever its timeout.
 
@@ -23,7 +23,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { currentSession, readSessionSettings, readStatus } from "../lib/session.mjs";
+import { currentSession, mark, readSessionSettings, readStatus } from "../lib/session.mjs";
+import { LISTED_KEEP_SEC, MAX_LISTED } from "../lib/buffer.mjs";
 import { isAutoMoment } from "../lib/settings.mjs";
 import { scoreBand } from "../engine/boqo/score-grade.mjs";
 
@@ -87,17 +88,9 @@ async function momentNames(momentsDir) {
   }
 }
 
-/** Create a marker file: true; false when it is already there (another `next` won it); null when its folder is gone (the watcher deleted an old listed moment). */
-export async function mark(file) {
-  try {
-    await (await fsp.open(file, "wx")).close();
-    return true;
-  } catch (err) {
-    if (err.code === "EEXIST") return false;
-    if (err.code === "ENOENT") return null;
-    throw err;
-  }
-}
+// The marker files are claimed with O_EXCL (lib/session.mjs mark): true, false when another `next` (or the watcher,
+// dropping a moment) won it, null when the folder is gone.
+export { mark };
 
 /**
  * The oldest ready, unclaimed moment that needs the agent: one at the bar is claimed (`.taken`); one below it is
@@ -133,7 +126,7 @@ async function listed(momentsDir, settings) {
   return out;
 }
 
-const DROPPED_HINT = "it may have been dropped: the watcher keeps only the newest 3 moments below the bar";
+const DROPPED_HINT = `it may have been dropped: with ${MAX_LISTED} moments below the bar held, the watcher drops one told ${LISTED_KEEP_SEC / 60} minutes ago or more`;
 
 async function doList(momentsDir, settings, status) {
   const moments = (await listed(momentsDir, settings)).map(({ name, dir, meta }) => ({

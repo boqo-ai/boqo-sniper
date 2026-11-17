@@ -17,13 +17,21 @@
 // what it writes: $BOQO_HOME/boqo-sniper/watch/<platform>-<slug>/<YYYYMMDD-HHMMSS>/
 //   buf/seg_<counter>.ts     6 s segments, the newest 360 s (a 300 s window and 60 s); capture-<n>.csv is a capture's segment list
 //   moments/<UTC stamp>/     video.mp4 + chat.json + meta.json (meta last)
+//   trash/                   a moment folder the watcher drops, moved out of moments/ in one step, then deleted
 //   status.json  settings.json  watch.pid   `stop` is written by stop.mjs, `clipnow` by --clip-now
 //
+// A moment below the bar is held for "clip it" by lib/buffer.mjs planListed's rule: never dropped before `next` told
+// the agent of it, and a told one only to make room for a new one, 15 minutes or more after the telling.
+//
 // One JSON line on stdout when it ends (exit 0 on a stop or after 10 minutes
-// offline), or {"error": "..."} and exit 1; {"error": "kick refused: <status>"} or {"error": "kick lookup timed out"} and exit 2 when
-// Kick's channel API answers anything but 200, or not within 15 s (its chat cannot start; Kick sits behind Cloudflare). Stderr is for humans. A run that
+// offline), or {"error": "..."} and exit 1. Kick (experimental) ends with exit 2 and
+// {"error": "kick refused: <status> ..."} or {"error": "kick lookup timed out ..."} when its channel API refuses the
+// start, or does not answer within 15 s, on every try a temporary answer gets (lib/chat.mjs: its chat cannot start;
+// Kick sits behind Cloudflare), and {"error": "kick refused the capture: ..."} when yt-dlp is turned away by kick.com
+// (lib/capture.mjs kickRefusal), instead of reading as an offline channel. Stderr is for humans. A run that
 // fails after its session folder exists also leaves status.json at
-// {"state": "failed", "error": "..."}, so `next` and `status` can say why.
+// {"state": "failed", "error": "..."}, so `next` and `status` can say why. A hangup (SIGHUP) stops it only when it
+// writes to a terminal (lib/session.mjs hangupStops): under nohup, or as an agent's background task, it keeps going.
 //
 // Timeline: wall-clock epoch seconds, for chat, loudness, peakAt and every
 // segment (the detector's ticks are the same clock in milliseconds). The
@@ -57,7 +65,8 @@
 // 60000), BOQO_SNIPER_HORIZON_SEC (buffer length, default windowSec + 60),
 // BOQO_SNIPER_KEEP_BUF=1 (leave the segments on disk at exit),
 // BOQO_SNIPER_STALL_SEC, BOQO_SNIPER_MAX_QUEUE and BOQO_SNIPER_MIN_FREE_MB (when a
-// moment is skipped), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
+// moment is skipped), BOQO_SNIPER_MAX_LISTED and BOQO_SNIPER_LISTED_KEEP_MS (what is
+// held below the bar), BOQO_SNIPER_SOURCE (a JSON argv in place of yt-dlp),
 // BOQO_SNIPER_TEST_LIVE=1 (that source's channel polls live) and
 // BOQO_SNIPER_TEST_CRASH=throw|reject (a crash 300 ms in).
 //
@@ -81,12 +90,17 @@ import {
   cleanupSession,
   countUnclaimed,
   currentSession,
+  discardFolder,
+  dropMoment,
   freeBytes,
+  hangupStops,
+  heldListed,
   newSession,
   readStatus,
   writeSessionSettings,
   stamp,
   sweepAll,
+  trashDir,
   watcherPid,
   writeJsonAtomic,
   resolveChannel,
@@ -98,12 +112,14 @@ import {
   concatArgs,
   MAX_QUEUE,
   MAX_LISTED,
+  LISTED_KEEP_SEC,
   MIN_FREE_BYTES,
   concatList,
   createCaptureClock,
   parseSegmentName,
   parseSegmentNumber,
   planCut,
+  planListed,
   skipCut,
   pruneBefore,
   segmentFileName,
@@ -115,6 +131,7 @@ import {
   captureFfmpegArgs,
   chooseCapture,
   isSegmentOpening,
+  kickRefusal,
   readConfig,
   readSegmentRows,
   stallSecFor,
@@ -174,6 +191,23 @@ function crash(err) {
 }
 process.on("uncaughtException", crash);
 process.on("unhandledRejection", crash);
+
+// A hangup stops the watcher only when it writes to a terminal (lib/session.mjs hangupStops says why): SKILL.md's
+// `nohup … &` start, and an agent's background task, keep recording until stop.mjs. Registered first thing, since
+// Node's own default for SIGHUP ends the process, under nohup too.
+let stopOnSignal = null; // main's, once the run can stop cleanly
+const HANGUP_STOPS = hangupStops();
+process.on("SIGHUP", () => {
+  if (!HANGUP_STOPS) {
+    console.error("hangup ignored: the watcher writes to no terminal (nohup, or an agent's background task); stop.mjs stops it");
+    return;
+  }
+  if (stopOnSignal) stopOnSignal();
+  else process.exit(129);
+});
+
+/** A Kick refusal ends the watch with exit 2, as its start's refusals do. */
+const kickError = (message) => Object.assign(new Error(message), { exitCode: 2 });
 
 export function parseArgs(argv) {
   const o = { channel: null, sensitivity: null, replay: null, chat: null, clipNow: false };
@@ -463,6 +497,9 @@ async function isLive(tool, target) {
     const r = await runOnce("yt-dlp", ["-q", "--no-warnings", "--print", "is_live", streamUrl(target)], {
       timeoutMs: 45000,
     });
+    // turned away by kick.com is not offline: say so and end, rather than 10 silent "not live" polls
+    const refused = target.platform === "kick" ? kickRefusal(r.stderr) : null;
+    if (refused) throw kickError(refused);
     return r.code === 0 && r.stdout.trim().split(/\s+/).pop() === "True";
   }
   if (tool === "streamlink") {
@@ -521,6 +558,8 @@ async function main() {
   const pollSec = envNumber("BOQO_SNIPER_POLL_MS", 60000) / 1000;
   const keepBuf = process.env.BOQO_SNIPER_KEEP_BUF === "1";
   const maxQueue = envNumber("BOQO_SNIPER_MAX_QUEUE", MAX_QUEUE);
+  const maxListed = envNumber("BOQO_SNIPER_MAX_LISTED", MAX_LISTED);
+  const listedKeepMs = envNumber("BOQO_SNIPER_LISTED_KEEP_MS", LISTED_KEEP_SEC * 1000);
   const minFreeBytes = envNumber("BOQO_SNIPER_MIN_FREE_MB", MIN_FREE_BYTES / 1e6) * 1e6;
 
   const { config, warning } = await readConfig();
@@ -570,6 +609,7 @@ async function main() {
   const dir = await newSession(target, new Date());
   const bufDir = path.join(dir, "buf");
   const momentsDir = path.join(dir, "moments");
+  const trash = trashDir(dir);
   const stopFile = path.join(dir, "stop");
   try {
     await fs.writeFile(path.join(dir, "watch.pid"), String(process.pid), { flag: "wx" });
@@ -633,7 +673,7 @@ async function main() {
   const pending = []; // moments waiting for their post-roll
   let lastDoneEnd = -Infinity;
   let moments = 0;
-  let dropped = 0; // listed moments deleted to keep the newest MAX_LISTED
+  let dropped = 0; // told moments below the bar dropped to make room for a new one (planListed)
   let lowDisk = null; // set with every status write
   const skipped = owned.skipped; // moments not cut: { queue, disk }
   let state = "waiting";
@@ -696,7 +736,7 @@ async function main() {
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
-  process.on("SIGHUP", onSignal);
+  stopOnSignal = onSignal; // a hangup, when it stops the watcher at all (above main)
 
   /** A sleep that wakes for a stop request once a second. */
   async function nap(sec) {
@@ -802,19 +842,32 @@ async function main() {
     lastDoneEnd = Math.max(lastDoneEnd, seg.t0 + SEGMENT_SEC);
   }
 
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const keepMin = Math.round(listedKeepMs / 60000);
+
   async function cut(spike) {
-    // About 260 MB a moment at 1080p60 (lib/buffer.mjs MIN_FREE_BYTES): never more than maxQueue waiting for the
-    // agent, never under minFreeBytes free. A moment below the bar is no queue, and a hand-made one skips the queue.
+    // About 260 MB a moment at 1080p60 (lib/buffer.mjs MIN_FREE_BYTES): never more than maxQueue at the bar waiting
+    // for the agent, never more than maxListed held below it (planListed decides what makes room), never under
+    // minFreeBytes free. A hand-made moment skips the queue.
     const goes = isAutoMoment(spike, settings);
-    const unclaimed = goes && spike.signal !== "manual" ? await countUnclaimed(momentsDir, (m) => isAutoMoment(m, settings)) : 0;
+    const isAuto = (m) => isAutoMoment(m, settings);
+    const unclaimed = goes && spike.signal !== "manual" ? await countUnclaimed(momentsDir, isAuto) : 0;
+    let room = { cut: true, drop: [] };
+    let held = [];
+    if (!goes) {
+      held = await heldListed(momentsDir, isAuto);
+      room = planListed(held, { maxListed, keepSec: listedKeepMs / 1000 });
+    }
     const free = await freeBytes(dir);
-    const why = skipCut({ unclaimed, freeBytes: free }, { maxQueue, minFreeBytes });
+    const why = room.cut ? skipCut({ unclaimed, freeBytes: free }, { maxQueue, minFreeBytes }) : "queue";
     if (why) {
       skipped[why]++;
       console.error(
-        why === "queue"
-          ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} for the agent`
-          : `moment at ${iso(spike.peakAt)} skipped: only ${(free / 1e9).toFixed(1)} GB free`,
+        !room.cut
+          ? `moment at ${iso(spike.peakAt)} skipped: ${plural(held.length, "moment below the bar waits", "moments below the bar wait")} to be told, or ${held.length === 1 ? "was" : "were"} told under ${keepMin} minutes ago`
+          : why === "queue"
+            ? `moment at ${iso(spike.peakAt)} skipped: ${unclaimed} ${unclaimed === 1 ? "moment waits" : "moments wait"} for the agent`
+            : `moment at ${iso(spike.peakAt)} skipped: only ${(free / 1e9).toFixed(1)} GB free`,
       );
       return;
     }
@@ -836,6 +889,7 @@ async function main() {
     }
     const momentDir = path.join(momentsDir, name);
     const listName = `cut-${process.pid}.txt`;
+    let made = false;
     try {
       await fs.writeFile(path.join(bufDir, listName), concatList(plan.segments.map((s) => s.name)));
       const r = await runOnce("ffmpeg", concatArgs(listName, path.join(momentDir, "video.mp4")), {
@@ -849,6 +903,7 @@ async function main() {
         .filter((c) => c.t >= first && c.t < end)
         .map((c) => ({ t: Math.round((c.t - first) * 100) / 100, user: c.user, text: c.text, emotes: c.emotes }));
       await fs.writeFile(path.join(momentDir, "chat.json"), JSON.stringify(lines));
+      // meta.json last: the folder is a moment from here on, and nothing after this line can undo it
       await writeJsonAtomic(path.join(momentDir, "meta.json"), {
         peakAt: spike.peakAt,
         score: spike.score,
@@ -863,39 +918,39 @@ async function main() {
         startAt: first,
         endAt: end,
       });
-      moments++;
-      if (owned) owned.moments = moments;
-      if (!goes) await pruneListed();
+      made = true;
     } catch (err) {
       console.error(`cut failed: ${err.message}`);
-      await fs.rm(momentDir, { recursive: true, force: true });
+      // it has no meta.json, so it is no moment to `next` or to any count, even if it cannot go
+      const gone = await discardFolder(momentDir, trash);
+      if (!gone.moved && !gone.removed) console.error(`the failed cut ${name} could not be removed: ${gone.error}`);
     } finally {
       await unlinkRetry(path.join(bufDir, listName));
     }
+    if (!made) return;
+    moments++;
+    if (owned) owned.moments = moments;
+    // Only now, with the new moment whole: the held ones it replaces. A drop never touches the new cut.
+    for (const d of room.drop) await dropListed(d);
   }
 
-  /** Moments below the bar wait for "clip it" and are no queue: keep the newest MAX_LISTED and delete the rest. */
-  async function pruneListed() {
-    const listed = [];
-    let names = [];
+  /** Drop a told moment below the bar to make room (planListed), and say so on stderr. Never throws. */
+  async function dropListed(d) {
+    const name = path.basename(d);
+    let r;
     try {
-      names = (await fs.readdir(momentsDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-    } catch {}
-    for (const name of names) {
-      const d = path.join(momentsDir, name);
-      try {
-        await fs.access(path.join(d, ".taken"));
-        continue;
-      } catch {}
-      try {
-        if (!isAutoMoment(JSON.parse(await fs.readFile(path.join(d, "meta.json"), "utf8")), settings)) listed.push(d);
-      } catch {}
+      r = await dropMoment(d, trash);
+    } catch (err) {
+      console.error(`listed moment ${name} could not be dropped: ${err.message}`);
+      return;
     }
-    for (const d of listed.slice(0, Math.max(0, listed.length - MAX_LISTED))) {
-      console.error(`listed moment ${path.basename(d)} deleted: only the newest ${MAX_LISTED} below the bar are kept`);
-      await fs.rm(d, { recursive: true, force: true });
-      dropped++;
-    }
+    if (!r.dropped) return; // the agent took it meanwhile
+    dropped++;
+    console.error(
+      `listed moment ${name} dropped: told ${keepMin} minutes ago or more, and ${plural(maxListed, "moment below the bar is", "moments below the bar are")} held`,
+    );
+    if (!r.moved && !r.removed) console.error(`listed moment ${name} could not be moved out (${r.error}): it is claimed and its video deleted`);
+    else if (!r.removed) console.error(`listed moment ${name} is out of moments/, and its files go when the watch ends (${r.error})`);
   }
 
   /** `--clip-now` leaves `clipnow` in the session: a hand-made moment at this second (hosted's manualCandidate). */
@@ -1028,6 +1083,9 @@ async function main() {
 
   // ---- run ----
 
+  // Said before the chat starts: Kick's channel lookup can take its tries (up to about 52 s), and Starting step 5
+  // reads this status to see the watch is up.
+  await writeStatus();
   let chat = null;
   if (replay) {
     // chat comes from the file
@@ -1035,11 +1093,14 @@ async function main() {
     // tests: BOQO_SNIPER_TEST_KICK_STATUS=<n> makes Kick's channel API answer with that status
     const testKick = process.env.BOQO_SNIPER_TEST_KICK_STATUS;
     // BOQO_SNIPER_TEST_KICK_HANG=1: the channel API never answers; BOQO_SNIPER_KICK_LOOKUP_MS shortens the 15 s wait
-    const fetchImpl = process.env.BOQO_SNIPER_TEST_KICK_HANG === "1"
+    const testHang = process.env.BOQO_SNIPER_TEST_KICK_HANG === "1";
+    const fetchImpl = testHang
       ? () => new Promise(() => {})
       : testKick
       ? async () => ({ status: Number(testKick), ok: Number(testKick) === 200, json: async () => ({ chatroom: { id: 1 } }) })
       : globalThis.fetch;
+    // and with either, a chat socket that never opens: a test never reaches Kick's chat server
+    const socketImpl = testHang || testKick ? class { addEventListener() {} send() {} close() {} } : globalThis.WebSocket;
     try {
       chat = await startChat({
         platform,
@@ -1047,11 +1108,13 @@ async function main() {
         onMessage: onChat,
         onOpenChange: (open) => onChatState(open ? "open" : "connecting"),
         fetch: fetchImpl,
+        WebSocket: socketImpl,
         lookupTimeoutMs: envNumber("BOQO_SNIPER_KICK_LOOKUP_MS", KICK_LOOKUP_TIMEOUT_MS),
       });
     } catch (err) {
-      // Kick answered the channel lookup with something but 200, or not at all in time: no chatroom to join, so no
-      // chat for the whole watch. Say so now, in one line, and stop; the person decides (Kick sits behind Cloudflare).
+      // Kick refused the channel lookup, or did not answer in time, on every try a temporary answer gets: no chatroom
+      // to join, so no chat for the whole watch. Say so now, in one line, and stop; the person decides (Kick sits
+      // behind Cloudflare).
       if (err instanceof KickRefused || err instanceof KickLookupTimeout) await failSession(err.message, 2);
       throw err;
     }
@@ -1076,6 +1139,9 @@ async function main() {
       if (await checkStop()) break;
       await tick(true); // the capture is over: its last segment is whole now
       feed = null; // the next capture phase starts a new detector
+      // a Kick capture turned away by kick.com is not an offline channel: say so and end, now
+      const refused = totalSegments === before && platform === "kick" ? kickRefusal(lastCaptureTail) : null;
+      if (refused) throw kickError(refused);
       if (totalSegments > before) {
         offlinePolls = 0;
         failedCaptures = 0;
@@ -1125,10 +1191,11 @@ async function main() {
     }
   }
   await writeStatus();
+  await fs.rm(trash, { recursive: true, force: true }).catch(() => {});
   await fs.rm(path.join(dir, "watch.pid"), { force: true });
   await fs.rm(stopFile, { force: true });
 
-  if (exitError) fail(failMessage);
+  if (exitError) fail(failMessage, exitError.exitCode ?? 1);
   process.stdout.write(JSON.stringify({ state, platform, channel, session: dir, moments, offlinePolls, ...(lowDisk ? { lowDisk } : {}) }) + "\n", () => process.exit(0));
 }
 

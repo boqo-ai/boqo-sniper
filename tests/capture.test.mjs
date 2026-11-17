@@ -11,6 +11,7 @@ import {
   captureFfmpegArgs,
   chooseCapture,
   isSegmentOpening,
+  kickRefusal,
   readConfig,
   readSegmentRows,
   stallSecFor,
@@ -264,4 +265,20 @@ test("isSegmentOpening: only the routine segment lines, so a dying capture's rea
   assert.equal(isSegmentOpening("[out#0/segment @ 0x1] Error opening output seg_x.ts: Permission denied"), false);
   assert.equal(isSegmentOpening("[vist#0:0/h264 @ 0x1] Error submitting packet to decoder"), false);
   assert.equal(isSegmentOpening("pipe:0: Invalid data found when processing input"), false);
+});
+
+test("kickRefusal: yt-dlp's HTTP Error 403 from kick.com is a refusal said plainly; anything else (offline, a 404, a network error) is not", () => {
+  // yt-dlp 2026.08.19 (extractor/common.py, `_request_webpage`): `<errnote>: <err>`, the HTTPError printed as `HTTP Error 403: Forbidden`
+  const refused = "yt-dlp: ERROR: [kick:live] xqc: Unable to download JSON metadata: HTTP Error 403: Forbidden (caused by <HTTPError 403: Forbidden>)";
+  const why = kickRefusal(refused);
+  assert.equal(
+    why,
+    "kick refused the capture: yt-dlp got HTTP Error 403 from kick.com, which sits behind Cloudflare (Kick support is experimental; yt-dlp needs a browser to impersonate, see yt-dlp --list-impersonate-targets)",
+  );
+  assert.equal(kickRefusal(`ffmpeg: pipe:0: Invalid data\n${refused}`), why, "anywhere in a capture's tail");
+  assert.equal(kickRefusal("ERROR: [kick:live] xqc: The channel is not currently live"), null);
+  assert.equal(kickRefusal("ERROR: [kick:live] xqc: Unable to download JSON metadata: HTTP Error 404: Not Found"), null);
+  assert.equal(kickRefusal("ERROR: [kick:live] xqc: Unable to download JSON metadata: <urlopen error [Errno -3] Temporary failure in name resolution>"), null);
+  assert.equal(kickRefusal(""), null);
+  assert.equal(kickRefusal(undefined), null);
 });

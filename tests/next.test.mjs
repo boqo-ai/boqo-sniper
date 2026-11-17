@@ -403,7 +403,78 @@ test("--take of a name that is gone says it may have been dropped", async () => 
     await addMoment(session, "20261116-100000", { score: 70 });
     const r = await runNext(["chan", "--take", "20261116-090000"]);
     assert.equal(r.code, 1);
-    assert.match(r.json.error, /^no moment named 20261116-090000: it may have been dropped: the watcher keeps only the newest 3/);
+    assert.match(r.json.error, /^no moment named 20261116-090000: it may have been dropped: with 10 moments below the bar held, the watcher drops one told 15 minutes ago or more$/);
+  });
+});
+
+// ---- the watcher dropping a told moment below the bar, with a `next` waiting (lib/session.mjs dropMoment) ----
+
+const busy = (code) => Object.assign(new Error(`${code}: resource busy or locked`), { code });
+
+test("a dropped moment leaves moments/ in one step: a waiting next never hands it out again, even when its delete fails half way", async () => {
+  await withHome(async () => {
+    const { dropMoment, cleanupSession } = await import("../lib/session.mjs");
+    const session = await newSession("chan");
+    await setStatus(session, "live");
+    const told = await addMoment(session, "20261116-100000", { score: 60, signal: "chat" }); // below the bar, told
+    await fs.writeFile(path.join(told, ".listed"), "");
+    const waiting = runNext(["chan", "--timeout", "4"]);
+    await new Promise((r) => setTimeout(r, 700)); // next has scanned once and waits (its only moment was told)
+    // E4's failure: the delete takes `.listed` first and then fails (ENOTEMPTY, or a Windows lock), and a scan woken
+    // by the delete's own events in between sees meta.json with no `.listed`: a moment it has never told.
+    const trash = path.join(session, "trash");
+    const rm = async (p) => {
+      await fs.unlink(path.join(p, ".listed")).catch(() => {});
+      await new Promise((r) => setTimeout(r, 1500));
+      throw busy("ENOTEMPTY");
+    };
+    const r = await dropMoment(told, trash, { rm });
+    assert.deepEqual([r.dropped, r.moved, r.removed], [true, true, false]);
+    const got = await waiting;
+    assert.equal(got.code, 0, got.stderr);
+    assert.equal(got.json.timeout, true, `never handed out a second time: ${got.stdout}`);
+    assert.deepEqual(await fs.readdir(path.join(session, "moments")), [], "no folder is left in moments/ to hold a slot");
+    assert.equal((await fs.readdir(trash)).length, 1, "what could not be deleted waits in the session's trash/");
+    await cleanupSession(session);
+    await assert.rejects(fs.access(trash), "the session's cleanup empties trash/");
+  });
+});
+
+test("a dropped moment whose folder cannot be moved (a Windows lock) is claimed and its video deleted: it holds no slot and is never told again", async () => {
+  await withHome(async () => {
+    const { dropMoment, heldListed, countUnclaimed } = await import("../lib/session.mjs");
+    const session = await newSession("chan");
+    await setStatus(session, "live");
+    const told = await addMoment(session, "20261116-100000", { score: 60, signal: "chat" });
+    await fs.writeFile(path.join(told, ".listed"), "");
+    const rename = async () => {
+      throw busy("EBUSY");
+    };
+    const r = await dropMoment(told, path.join(session, "trash"), { rename, retryMs: 1 });
+    assert.deepEqual([r.dropped, r.moved], [true, false]);
+    assert.deepEqual((await fs.readdir(told)).sort(), [".listed", ".taken", "meta.json"], "claimed, the video gone");
+    const moments = path.join(session, "moments");
+    assert.deepEqual(await heldListed(moments, () => false), [], "not held below the bar");
+    assert.equal(await countUnclaimed(moments), 0, "not in any queue");
+    const next = await runNext(["chan", "--timeout", "1"]);
+    assert.equal(next.json.timeout, true);
+    const list = await runNext(["chan", "--list"]);
+    assert.deepEqual(list.json.moments, []);
+  });
+});
+
+test("the watcher never drops a moment the agent claimed first: the claim is the same O_EXCL marker as --take's", async () => {
+  await withHome(async () => {
+    const { dropMoment } = await import("../lib/session.mjs");
+    const session = await newSession("chan");
+    const told = await addMoment(session, "20261116-100000", { score: 60 });
+    await fs.writeFile(path.join(told, ".listed"), "");
+    const take = await runNext(["chan", "--take", "20261116-100000"]);
+    assert.equal(take.json.moment, told);
+    const r = await dropMoment(told, path.join(session, "trash"));
+    assert.equal(r.dropped, false);
+    assert.deepEqual((await fs.readdir(told)).sort(), [".listed", ".taken", "meta.json", "video.mp4"], "untouched");
+    assert.equal((await dropMoment(path.join(session, "moments", "gone"), path.join(session, "trash"))).dropped, false, "a folder already gone");
   });
 });
 
